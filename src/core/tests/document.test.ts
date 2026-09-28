@@ -2755,7 +2755,7 @@ describe("Components: instance overrides", () => {
         // The failure mode this guards: a missed call site dispatches an action whose target
         // isn't in the stored document, `dispatchAction` returns success:false, and the control
         // silently does nothing. The App inspector was exactly such a site.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).not.toMatch(/new UpdateNodeGeometryAction\(/); // inspector routes via geometryActionFor
         expect(src).not.toMatch(/new UpdateNodeStyleAction\(/);    // …and styleActionFor
         // THE ONE CASE THE ROUTER CANNOT SERVE is a node created in the same transaction: it exists
@@ -2781,7 +2781,7 @@ describe("Components: instance overrides", () => {
         // A TEXT GUARD, deliberately, and it is the same trade `no backend derives a tilemap
         // sheet's pixel size` makes: this markup has no unit harness at all, so the alternative to
         // reading the source is no check whatsoever. What it pins is exactly what was wrong.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).not.toMatch(/if \(!mapSet\?\.sheet\) return null;/);
         // The RING is what genuinely needs a sheet — it is a rectangle inside one — so it is the
         // thing that stayed conditional. Without this half, deleting the gate entirely would pass.
@@ -3030,7 +3030,7 @@ describe("Components: detach instance", () => {
         // it instead of each control re-implementing the rule.
         // The failure mode is unchanged and is why this is pinned at all: a control that looks
         // available and silently does nothing.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/const detachInstance = useCallback\(/);
         expect(src).toMatch(/if \(!action\.validate\(\)\) return;/);
         // And it is asked BEFORE the dispatch, not after — checking afterwards is not a check.
@@ -7731,7 +7731,7 @@ describe("Review fixes: an override src obeys the same rule a stored src does (s
     test("the app's URL fallback runs the SAME validator the file branch does", () => {
         // Without it a refused URL fell through to AddNodeAction, whose failure is silent —
         // the drag vanished with no explanation on exactly the inputs the file branch explains.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const cancelBranch = src.slice(src.indexOf('addEventListener("cancel"'), src.indexOf('addEventListener("change"'));
         expect(cancelBranch).toMatch(/srcError\("core\.image"/);
         expect(cancelBranch).toMatch(/window\.alert/);
@@ -7877,7 +7877,7 @@ describe("ShapeTool: the polygon tool", () => {
 
     test("the toolbar's side control is bound to the SAME clamp the generator uses", () => {
         // A control that showed 100 while drawing a 64-gon would be lying about the result.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/clampSides\(raw\)/);
         expect(src).toMatch(/min=\{POLYGON_MIN_SIDES\}/);
         expect(src).toMatch(/max=\{POLYGON_MAX_SIDES\}/);
@@ -7964,7 +7964,7 @@ describe("ShapeTool: filled or outline", () => {
     test("the toolbar reads the SAME table the tool commits from", () => {
         // A control offered for a kind the tool ignores would be a lie; the app asks
         // `supportsPaintMode` rather than keeping its own list.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/supportsPaintMode\(toolName\)/);
     });
 });
@@ -8402,7 +8402,7 @@ describe("UpdateNodeContentAction", () => {
     test("the inspector reaches every Style field the schema defines", () => {
         // The audit that prompted this slice: the panel edited x/y/w/h, fill and opacity, and
         // nothing else — while the engine validated, rendered and round-tripped the rest.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         for (const field of ["fill", "stroke", "strokeWidth", "radius", "opacity", "fontSize", "shadow", "blur"]) {
             expect(src).toMatch(new RegExp(`style: \\{ ${field}`));
         }
@@ -8467,7 +8467,7 @@ describe("Inspector: layout controls", () => {
     test("the inspector offers CHILD-side layout only where it applies", () => {
         // Under a container: grow/shrink/margin/absolute. Under a plain parent: constraints.
         // Showing both would offer controls the engine ignores.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/parentIsContainer \?/);
         expect(src).toMatch(/editLayout\(\{ grow:/);
         expect(src).toMatch(/editLayout\(\{ shrink:/);
@@ -8479,7 +8479,7 @@ describe("Inspector: layout controls", () => {
 
     test("the inspector reaches the auto-layout CONTAINER fields the engine implements", () => {
         // The audit that prompted this slice, for Layout the way the Style one works.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         for (const field of ["direction", "gap", "padding", "alignItems", "wrap"]) {
             expect(src).toMatch(new RegExp(`editContainer\\(\\{ ${field}`));
         }
@@ -8836,7 +8836,7 @@ describe("exportSVG typography and line breaks", () => {
         // Content field was an `<input>`, which strips newlines — so multi-line text, which both
         // backends and the exporter support, could not be authored at all. A feature with no way
         // to reach it is not a feature.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/<textarea[\s\S]{0,200}value=\{node\.text \?\? ""\}/);
         // …and the export can be READ without a native dialog in the way, which is both a
         // usability win and the only way to verify the exporter end to end.
@@ -9171,7 +9171,7 @@ describe("Tokens: authored, assigned, themed", () => {
         expect(variableKeyError("__proto__")).not.toBeNull();
         expect(variableKeyError("")).not.toBeNull();
         expect(variableKeyError("color/ok")).toBeNull();
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/variableKeyError\(key\)/);
     });
 
@@ -9196,7 +9196,7 @@ describe("Tokens: authored, assigned, themed", () => {
 
     test("the UI can both AUTHOR a token and ASSIGN one — either alone is useless", () => {
         // The audit that prompted this slice, for tokens the way it exists for Style and Layout.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/new SetVariableAction\(/);      // author
         expect(src).toMatch(/new DeleteVariableAction\(/);   // remove
         expect(src).toMatch(/<TokenSelect/);                 // assign
@@ -9320,7 +9320,7 @@ describe("Track lists: the authoring form of TrackSize[]", () => {
     });
 
     test("the UI can CREATE a grid and edit every track field", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/<TrackListInput/);
         expect(src).toMatch(/editGrid\(\{ columns: t \}\)/);      // columns
         expect(src).toMatch(/editGrid\(\{ rows: t \?\? undefined \}\)/);  // the OPTIONAL rows list
@@ -9563,7 +9563,7 @@ describe("Variants: a set is just the masters that name it", () => {
     });
 
     test("the UI can TAG a master and SWITCH an instance — either alone is useless", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/<VariantSection/);
         expect(src).toMatch(/new SetVariantAction\(/);            // tag
         expect(src).toMatch(/new SetInstanceVariantAction\(/);    // switch
@@ -9933,7 +9933,7 @@ describe("Slots: content an instance supplies", () => {
     });
 
     test("the UI can NAME a slot and FILL one — either alone is useless", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/<SlotSection/);
         expect(src).toMatch(/e\.target\.checked \? "content" : null/);  // become a slot
         expect(src).toMatch(/new SetSlotAction\(dispatcher\.getDocument\(\), node\.id, v\)/); // …and rename it
@@ -10227,7 +10227,7 @@ describe("States: a document-level selection, like the theme", () => {
     });
 
     test("the UI can DEFINE a state and SHOW one — either alone is useless", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/<StatesSection/);
         // TWO call sites use the same constructor (re-capture and capture-new), so the
         // audit must name something unique to each or deleting one still passes.
@@ -10370,7 +10370,7 @@ describe("Layers: hidden and locked", () => {
     });
 
     test("the panel offers both toggles, and shows an INHERITED flag without pretending it is set", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/onFlag\(\{ hidden: !node\.hidden \}\)/);
         expect(src).toMatch(/onFlag\(\{ locked: !node\.locked \}\)/);
         expect(src).toMatch(/inheritedHidden \? "default" : "pointer"/);   // an inherited flag is not clickable here
@@ -10469,7 +10469,7 @@ describe("resolveLayerDrop", () => {
     });
 
     test("the panel offers drag AND rename, and shows only drops it would take", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/draggable=\{!renaming\}/);
         expect(src).toMatch(/new ReparentNodeAction\(dispatcher\.getDocument\(\), layerDrag\.id, drop\.parent, drop\.index\)/);
         // The indicator is gated on the SAME resolver the drop uses, so the two cannot disagree.
@@ -10587,7 +10587,7 @@ describe("Opacity: a group's fade reaches its contents", () => {
         // Counting the call site: `styleActionFor` appears many times in App.tsx, so matching the
         // bare name would pass with the layer control deleted — the audit fault from the slots
         // and states slices, twice recorded and twice repeated.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/onOpacity=\{opacity => \{/);
         expect(src).toMatch(/styleActionFor\(dispatcher\.getDocument\(\), id, \{ opacity \}\)/);
         expect(src).toMatch(/onOpacity\(Math\.min\(1, Math\.max\(0, pct \/ 100\)\)\)/);
@@ -10698,7 +10698,7 @@ describe("filterLayers", () => {
     });
 
     test("the panel wires BOTH — searching and multi-select, each at its own call site", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/filterLayers\(doc, layerQuery, labelOf\)/);
         expect(src).toMatch(/selectionForRowClick\(visibleOrder, es\.selectedNodeIds, layerAnchorRef\.current, id, mods\)/);
         // Filtering must IGNORE the collapsed state, or search only finds what was already open.
@@ -10865,7 +10865,7 @@ describe("PathBuilder", () => {
     });
 
     test("the pen is wired as a tool and previews before it commits", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/pen: new PenTool\(/);
         expect(src).toMatch(/pendingPath: es\.pendingPath/);
         // Switching tools mid-stroke must abandon it, or the preview outlives the tool.
@@ -11689,7 +11689,7 @@ describe("Shape to path, and boolean actions", () => {
     test("the toolbar's boolean buttons combine the selection and select the result", () => {
         // The row is gated on a MULTI-selection, like align — and the result must become the
         // selection, or the user is left holding ids for shapes the combine just deleted.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/BOOLEAN_BUTTONS\.map\(\(\[op, glyph, label\]\)/);
         // Tied together in ONE match: `es.selectedNodeIds = [id]` also appears in the asset
         // placer, so asserting it alone would pass even with the boolean handler's copy deleted.
@@ -11914,7 +11914,7 @@ describe("core.boolean — the non-destructive combine", () => {
     });
 
     test("the toolbar offers the live combine, the flatten, and the operation switcher", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         // A plain click builds the LIVE node; Alt flattens. Both from one handler.
         expect(src).toMatch(/onClick=\{e => runBoolean\(op, !e\.altKey\)\}/);
         expect(src).toMatch(/live[\s\S]{0,200}makeBooleanNodeAction\(doc, computeGeometry\(doc\), es\.selectedNodeIds, op, id\)[\s\S]{0,120}booleanAction\(/);
@@ -12006,7 +12006,7 @@ describe("Typography", () => {
     });
 
     test("the inspector offers every control, clamped to the validator's own ranges", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/style: \{ fontFamily: v \}/);
         expect(src).toMatch(/fontWeight: Math\.min\(1000, Math\.max\(1, v\)\)/);
         expect(src).toMatch(/lineHeight: Math\.max\(0\.01, v\)/);
@@ -12234,7 +12234,7 @@ describe("Prototype interactions and transitions", () => {
         // unreachable: `blendStates` interpolates geometry and transform, so a prototype could
         // change colour but could never move, grow or turn anything. The animation existed and
         // nothing could author an input for it.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/function captureLook\(node: Node\): StateDefinition \{[\s\S]{0,300}geometry: \{ \.\.\.node\.geometry \}/);
         expect(src).toMatch(/\.\.\.\(node\.transform \? \{ transform: \{ \.\.\.node\.transform \} \} : \{\}\)/);
         // BOTH capture buttons (re-capture and capture-as) go through the one helper, so the
@@ -12267,7 +12267,7 @@ describe("Prototype interactions and transitions", () => {
     });
 
     test("the app plays through the pure blend and stops without touching the document", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         // The scene shown while playing is a DERIVED document, not an edited one.
         expect(src).toMatch(/blendStates\(stored, es\.transition\.from, es\.transition\.to,/);
         expect(src).toMatch(/easingAt\(es\.transition\.easing, \(Date\.now\(\) - es\.transition\.startedAt\) \/ es\.transition\.duration\)/);
@@ -12469,7 +12469,7 @@ describe("Prototype navigation", () => {
     });
 
     test("stopping play clears a running navigation, and the app drives it on the LIVE viewport", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/Object\.assign\(es\.viewport, lerpViewport\(vt\.from, vt\.to, k,/);
         // …AND THE SIZE IS PASSED, which is what decides that the focused point stays still.
         // Reading it from the live canvas rather than a stored number matters: a window
@@ -12623,7 +12623,7 @@ describe("Script API", () => {
     });
 
     test("the panel compiles against the CURRENT document and shows every refusal", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         // The script ran against a SNAPSHOT; anything that changed underneath it must be caught
         // by the validators rather than assumed away.
         expect(src).toMatch(/compileScript\(dispatcher\.getDocument\(\), result\.requests,/);
@@ -18878,7 +18878,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // `Sequence` was one of four importers with no production caller: written, tested, pinned in
         // apiSurface, and unopenable from the app. A green suite proves behaviour, never that
         // anything runs it — see the cursor key, the terrain copier, and Escape before them.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const workflow = readFileSync(resolve(__dirname, "../../app/AssetImportWorkflow.ts"), "utf8");
         const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
         expect(app).toMatch(/from "\.\.\/core\/import\/Sequence"/);
@@ -18895,9 +18895,8 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(main).toMatch(/resolveConfined\(folder, folder, filePath, "an image"\)/);
 
         // THE HANDLER HOLDS ONLY THE PLACEMENT. Everything else is `sequenceImportActions`, whose
-        // behaviour the test below actually runs — because this handler cannot be run by anything:
-        // `window.electronAPI` is frozen, so the native folder dialog it starts with can be neither
-        // driven nor stubbed. Code that can only be read should be as small as it can be.
+        // behaviour the test below actually runs. The folder dialog and frame reads live in
+        // FoldersDrawer and are driven there; this callback only places the prepared track.
         const handler = app.slice(app.indexOf("const importSequence = useCallback"),
             app.indexOf("const importSvg = useCallback"));
         expect(handler).toContain("sequenceImportActions(doc, {");
@@ -19089,7 +19088,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(preload).toMatch(/readAsepriteFolder:/);
         expect(preload).toMatch(/readAsepriteBytes:/);
 
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/api\.readAsepriteFolder\(folder\)/);
         expect(app).toMatch(/api\.readAsepriteBytes\(aseFolder, filePath\)/);
         expect(app).toMatch(/onImportAseprite=\{importAseprite\}/);
@@ -20372,7 +20371,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
 
         // AND THE PANEL REACHES ALL THREE EDITS. A schema change nobody can touch is the state this
         // project treats as a defect, and the table was in exactly that state when it shipped.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/new SetTilesetsAction\(/);
         expect(app).toMatch(/data-tileset-pick="1"/);
         expect(app).toMatch(/withTilesetId\(map, e\.target\.value\)/);
@@ -24753,7 +24752,7 @@ describe("Zoom to fit", () => {
 
         // THE APP ASKS IT for a declared screen, computes no geometry doing so, and the content
         // path survives as the fallback every pre-72 document uses.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/if \(doc\.screen\) \{[\s\S]{0,200}?viewportToScreen\(doc\.screen,/);
         expect(app).toMatch(/: contentBounds\(computeGeometry\(resolveScene\(doc\)\)\)|const box = contentBounds\(computeGeometry\(resolveScene\(doc\)\)\)/);
     });
@@ -24767,7 +24766,7 @@ describe("Zoom to fit", () => {
         // whose follow camera clamps to the level's extent. A document authored away from the
         // origin opens on nothing at all.
         expect(createEditorState().viewport).toEqual({ x: 0, y: 0, zoom: 1 });
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         // The same three pieces `view.zoomFit` uses, so the two framings cannot drift apart.
         expect(app).toMatch(/framedOnLoad\.current = true;[\s\S]{0,1400}?viewportToOpen\(box,/);
         expect(app).toMatch(/if \(framedOnLoad\.current \|\| !initialDocument\) return;/);
@@ -24781,7 +24780,7 @@ describe("Zoom to fit", () => {
         // live, clicked cleanly, and did nothing. Neither a unit test of either side could see it —
         // the gap is BETWEEN them.
         const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const sent = [...main.matchAll(/send\("([^"]+)"\)/g)].map(m => m[1]);
         // The sweep is only meaningful if it found the menu at all.
         expect(sent.length).toBeGreaterThan(20);
@@ -25509,7 +25508,7 @@ describe("The playhead a saved file remembers", () => {
         // `UpdateNodeContentAction` had with nine-slice, and it survives a mutation of either
         // assignment. There are exactly two ways a document arrives — the autosave at startup and
         // File > Open — and a third would need this line too.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const open = readFileSync(resolve(__dirname, "../../app/ProjectFileWorkflow.ts"), "utf8");
         expect(app).toMatch(/editorStateRef\.current\.frame = frameOnLoad\(initialDocument/);
         expect(app).toMatch(/bindProjectFileWorkflow\(api/);
@@ -25713,7 +25712,7 @@ describe("The control point the inspector is editing", () => {
         // `frameOnLoad` had, guarded the same way this repo already guards App wiring.
         const tc = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
         expect(tc).toMatch(/this\.editorState\.meshPoint = \{ nodeId: hit\.nodeId, index: mi \}/);
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/pickedMeshPoint\(es, dispatcher\.getDocument\(\)\)/);
         // The panel offers `boneChoices`, never its own idea of which nodes are legal — that is
         // what makes an invalid binding unreachable rather than merely rejected.
@@ -26352,7 +26351,7 @@ describe("The weight brush, as a gesture", () => {
         expect(src).toMatch(/meshHandles\(doc, computeGeometry\(doc\), \[nodeId\], posed\)/);
         expect(src).toMatch(/const posed = resolveScene\(doc\)/);
         // And the App hands the tool the panel's brush rather than a copy of the defaults.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/weights: new WeightTool\(dispatcher, es, refresh, \(\) => weightBrushRef\.current\)/);
         expect(shell).toMatch(/tools: \["select", "move", "weights"\]/);
@@ -26542,7 +26541,7 @@ describe("Turning clipping on, through the ordinary edit path", () => {
     test("the inspector offers it only where it can MEAN something", () => {
         // A leaf has nothing inside to cut, and the flag would buy an offscreen target on the GPU
         // for nothing. Guarded the way this repo guards App wiring.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(src).toMatch(/checked=\{node\.clipsContent === true\}/);
         expect(src).toMatch(/\{ clipsContent: e\.target\.checked \}/);
         // It routes through the CONTENT action; the geometry/style patch cannot carry it, and a
@@ -26815,7 +26814,7 @@ describe("The eyedropper as a gesture", () => {
         const src = readFileSync(resolve(__dirname, "../../editor/tools/EyedropperTool.ts"), "utf8");
         expect(src).toMatch(/resolveScene\(this\.dispatcher\.getDocument\(\)\)/);
         // …and the App hands it the SWATCH setter, not a document action.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/new EyedropperTool\(dispatcher, es, refresh, setPaintColour\)/);
         // THE PAINT STRIP CONTAINS IT, rather than the strip being exactly this list: the literal
@@ -28121,7 +28120,7 @@ describe("The paint bucket, as a gesture — the door onto a fill nothing called
         // the door stays open: the app constructs the tool, the paint workspace offers it, and the
         // colour row shows while it is selected (a bucket whose colour is off screen is a click with
         // an invisible outcome, which is exactly how the eyedropper shipped once).
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/bucket: new BucketTool\(dispatcher, es, refresh,/);
         // THE STRIP CONTAINS IT, rather than the strip being exactly one list. The eyedropper's own
@@ -28254,7 +28253,7 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         expect(preload).toMatch(/readUnityPackage:/);
         expect(preload).toMatch(/gunzipSync:/);
 
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/data-unity-btn="1"/);
         expect(app).toMatch(/data-unity-list="1"/);
         // THE INJECTION POINT IS USED — the parser takes a gunzip it calls DURING the parse, which
@@ -28274,7 +28273,7 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         // matched nothing, and could not fail loudly, because the chain ends in a working
         // `default`. A cursor is reached by `TOOL_CURSORS[toolName]`, so the rule is: every key
         // must be a name `setTool` can actually receive.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/\?\? TOOL_CURSORS\[toolName\]/);
 
@@ -28322,7 +28321,7 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         // THE COLLISION, which is what a survey of somebody else's icon set surfaced: `⇤ ⇹ ⇥` were
         // the object-align row (push the selection to an edge) AND the text-align row (set the
         // ragged side of a paragraph). Two operations, one set of glyphs, one inspector.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const row = app.slice(app.indexOf("{TEXT_ALIGNS.map(a =>"), app.indexOf("Line height (× size)"));
         expect(row).toContain("<AlignIcon align={a} />");
         // Sliced to the ROW, not searched in the whole file — the object row legitimately keeps
@@ -28369,7 +28368,7 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         const preload = readFileSync(resolve(__dirname, "../../electron/preload.js"), "utf8");
         expect(preload).toMatch(/readPaletteFolder:/);
         expect(preload).toMatch(/readPaletteFile:/);
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/parsePaletteFile\(json, f\.name\)/);
         // AND IT PASSES THE MASK, so the one panel button that edits pixels obeys the marquee like
         // the brush and the bucket do. Written as a containment rather than as the exact old call:
@@ -29295,7 +29294,7 @@ describe("The marquee, as a gesture — four shapes, four operators, no history 
         // app builds the tool, the paint workspace offers it, and the row carries the four modes and
         // the verbs — `fullMask`, `invertSelection`, `growSelection` and `borderSelection` have no
         // other caller in the app, so without these buttons they are arithmetic nobody can run.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/marquee: new PixelSelectTool\(dispatcher, es, refresh,/);
         expect(shell).toMatch(/id: "paint",.*"marquee"/);
@@ -29569,7 +29568,7 @@ describe("Adjust — the colour edits, and the half-steps that make them reversi
         // `core/paint/Adjust` would otherwise be nine functions with no caller — the exact state the
         // feature audit exists to find, and the one `Palette`, `Quantize` and `floodFill` were all
         // in before somebody asked.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/const action = surfaceEditAction\(doc, id, edit, pixelMaskFor\(es, doc, id\)\)/);
         for (const [attr, call] of [
             ["brightness", /adjustBrightness\(b, adjBrightness\)/],
@@ -29971,7 +29970,7 @@ describe("Brush faces — the variant brush that had no supplier", () => {
 
     test("the image brush is REACHABLE, which is what makes it a feature", () => {
         // Three functions, written together, none with a caller. The panel is the door.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/aria-label="Add brush face"/);
         expect(app).toMatch(/aria-label="Clear brush faces"/);
         expect(app).toMatch(/brushFromImage\(buffer\)/);
@@ -30238,7 +30237,7 @@ describe("CaveTerrain — cellular automata over the question, not the picture",
     test("the generator is REACHABLE, seed and all", () => {
         // Arithmetic nothing calls is not a feature — `rectCells`, `floodFill` and the .tmx
         // exporter each sat unused until something asked. This is the door.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/data-cave="1"/);
         expect(app).toMatch(/aria-label="Generate cave"/);
         expect(app).toMatch(/caveCells\(map\.cols, map\.rows,/);
@@ -30544,7 +30543,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // AND THE PANEL ACTUALLY CALLS THEM. This is not belt-and-braces: `copyTerrainMaterial` was
         // correct, tested, and bypassed — the panel hand-rolled the list beside it for two commits.
         // A function that is right and unreached is the bug, not the fix for it.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/setMap\(reorderTerrainMaterial\(map, m\.id, 1\)\)/);
         expect(app).toMatch(/setMap\(removeTerrainMaterial\(map, m\.id\)\)/);
         expect(app).toMatch(/addTerrainMaterial\(map\)/);
@@ -30771,7 +30770,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // marquee, pen, pixel-selection and the tile rectangle. `deselect` stands aside only when
         // NOTHING is selected, and a gesture that can be cancelled always has a selection, because
         // it needed one to start. So the shortcut consumed every press.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const handler = app.slice(app.indexOf("const handleKeyDown = "), app.indexOf("const handleKeyUp = "));
         const toTool = handler.indexOf("toolController.onKeyDown(e)");
         const toShortcut = handler.indexOf("const shortcut = resolveShortcut(e)");
@@ -30802,7 +30801,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // Giving them a field and no way to edit it would move the gap rather than close it: the
         // data would live in the file, survive every save, and be invisible to the person who owns
         // it. This is the door.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/<InspectorSection title="Metadata">/);
         expect(app).toMatch(/function MetadataSection\(/);
         expect(app).toMatch(/aria-label="Add property"/);
@@ -30815,7 +30814,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // Terrain had a field, a validator and a derivation and NO way to author it — the state the
         // audit exists to find. These assert the door: the panel converts a layer, offers the six
         // classes an artist draws, and the brush has a terrain mode.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/data-terrain-start="1"/);
         expect(app).toMatch(/asTerrain\(map, tileMaterial \|\| 1,/);
         expect(app).toMatch(/data-terrain-art="1"/);
@@ -31653,7 +31652,7 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
     test("the exporter is REACHABLE, which is what makes it a feature", () => {
         // A .tmx writer nothing can invoke is arithmetic, not an export — the state the feature
         // audit exists to find, and the one `floodFill`, `Palette` and `Adjust` were each in.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/data-export-tmx="1"/);
         expect(app).toMatch(/exportTiledMap\(getDocument\(\), "tiles.png"\)/);
         expect(app).toMatch(/writeIntoFolder\(folder, "map.tmx", out.xml\)/);
@@ -32032,7 +32031,7 @@ describe("the document's SCREEN (schema 72) — one screenful of the game", () =
     test("a TILED IMPORT declares the map's own size, and never resizes a declared one", () => {
         // The app-side rule mirrors the background's: same transaction, and a document that already
         // declares its screen keeps it — a second map must not resize the first one's play area.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/screen !== undefined && doc\.screen === undefined/);
         expect(app).toMatch(/width: map\.width \* map\.tileWidth/);
         // …and the control exists, so the field is authorable without an import.
@@ -32105,7 +32104,7 @@ describe("parallax and the INCREMENTAL geometry path — the fourth stale dirty 
     test("and the APP asks — a fix in a module nothing calls is not a fix", () => {
         // The reachability question this project treats as standing. `parallaxIds` living in
         // `Depth` proves nothing about the frame loop; these two lines are what make it run.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/parallaxIds\(doc\)/);
         expect(app).toMatch(/\.\.\.\(layered \?\? \[\]\)/);
         // …and that it is keyed on the VIEWPORT having moved, not recomputed unconditionally.

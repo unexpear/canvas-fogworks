@@ -448,7 +448,7 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     });
 
     it("and the APP stamps them — a derivation nothing calls is not a feature", () => {
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/applyCells\(/);
     });
 });
@@ -551,7 +551,7 @@ describe("pipes — DOWN inside a warp region moves you where the author pointed
         expect(b.star).toBe(99);
         // …AND THE APP GIVES THE RULES THE BUTTONS, and cuts the camera on a warp — without
         // either, pipes exist and cannot fire, or fire and swoosh across the level.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/bounds: runBoundsRef\.current, input: es\.input/);
         expect(app).toMatch(/c\.kind === "teleport" && c\.bodyId === es\.controlled/);
         expect(app).toMatch(/if \(key === "ArrowDown" \|\| key === "s" \|\| key === "S"\) return "down";/);
@@ -685,7 +685,7 @@ describe("the star and the 1-up — spawned movers, and what collecting them mea
         expect(runReadout(w, null)).toEqual({ tallies: [["coin", 2], ["1up", 1]], power: 0, starLeft: 0 });
 
         // AND THE APP DRAWS IT — a readout nothing renders is the disease this cures.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(app).toMatch(/data-run-hud="1"/);
         expect(app).toMatch(/runReadout\(es\.world, es\.controlled\)/);
         expect(app).toMatch(/data-hud-tally=\{k\}/);
@@ -1031,7 +1031,7 @@ describe("playBounds — a declared screen pins the run's vertical extent", () =
     });
 
     it("…and the APP asks it, or the field changes nothing anybody can see", () => {
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         expect(/playBounds\(contentBounds\(computed\), base\.screen\)/.test(app)).toBe(true);
     });
 });
@@ -1259,7 +1259,7 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
     });
 
     it("and the APP steps against the spawned document, not the stored one", () => {
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
         const session = readFileSync(resolve(__dirname, "GameplaySession.ts"), "utf8");
         expect(/stepGameplay\(base, world/.test(app)).toBe(true);
         expect(/const live = applyCells\(applySpawns\(doc, previous\), previous\)/.test(session)).toBe(true);
