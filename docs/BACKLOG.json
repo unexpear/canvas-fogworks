@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "lastReconciled": "2026-09-28",
-  "sourceRevision": "8054021",
+  "sourceRevision": "78ce04d",
   "productDirection": {
     "mode": "dual-track",
     "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
