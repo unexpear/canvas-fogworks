@@ -3,8 +3,9 @@
  * @description Exercises relocated glTF sidecars, ignored-pack exclusion, conflicts and confinement using owned temporary fixtures.
  */
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, readdirSync, promises } from "fs";
+import { spawnSync } from "child_process";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 const { copyProjectDependencies, rollbackDependencyJournal, DEPENDENCY_JOURNAL_NAME } = require("./projectDependencies");
 
 let dir: string, source: string, dest: string;
@@ -200,6 +201,96 @@ test("a rollback journal cannot delete outside the destination", async () => {
     await expect(copy()).rejects.toThrow(/journal/);
     expect(readFileSync(join(outside, "secret"), "utf8")).toBe("safe");
     expect(existsSync(join(dest, "models"))).toBe(false);
+});
+
+function deadPid(): number {
+    const exited = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+    if (!exited.pid) throw new Error("Could not obtain an exited process id.");
+    return exited.pid;
+}
+
+test("an unclean journal temp is removed and a live writer's temp is kept", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    const exited = deadPid();
+    const stale = `.${DEPENDENCY_JOURNAL_NAME}.${exited}.10.0.tmp`;
+    const linked = `.${DEPENDENCY_JOURNAL_NAME}.${deadPid()}.12.0.tmp`;
+    const live = `.${DEPENDENCY_JOURNAL_NAME}.1.11.0.tmp`;
+    writeFileSync(join(dest, stale), "partial journal");
+    writeFileSync(join(dest, live), "live writer");
+    const outside = join(dir, "secret");
+    writeFileSync(outside, "safe");
+    symlinkSync(outside, join(dest, linked));
+    await copy();
+    expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+    expect(readFileSync(join(dest, live), "utf8")).toBe("live writer");
+    expect(readFileSync(outside, "utf8")).toBe("safe");
+    expect(existsSync(join(dest, stale))).toBe(false);
+    expect(existsSync(join(dest, linked))).toBe(false);
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+});
+
+test("created dependency bytes are flushed before the journal is removed", async () => {
+    const atomic = require("./atomicWrite");
+    const events: string[] = [];
+    const realSyncFile = atomic.syncFile.bind(atomic);
+    const realSyncDirectory = atomic.syncDirectory.bind(atomic);
+    const realUnlink = promises.unlink.bind(promises);
+    const fileSpy = jest.spyOn(atomic, "syncFile").mockImplementation(async (file: unknown) => {
+        events.push(`sync:${basename(String(file))}`);
+        return realSyncFile(file);
+    });
+    const dirSpy = jest.spyOn(atomic, "syncDirectory").mockImplementation(async (directory: unknown) => {
+        events.push(`syncdir:${basename(String(directory))}`);
+        return realSyncDirectory(directory);
+    });
+    const unlinkSpy = jest.spyOn(promises, "unlink").mockImplementation(async (file) => {
+        events.push(`unlink:${basename(String(file))}`);
+        return realUnlink(file);
+    });
+    try {
+        await copy();
+        const unlinkAt = events.indexOf(`unlink:${DEPENDENCY_JOURNAL_NAME}`);
+        expect(unlinkAt).toBeGreaterThan(-1);
+        for (const name of ["shape.gltf", "shape.bin", "color.png"]) {
+            const synced = events.indexOf(`sync:${name}`);
+            expect(synced).toBeGreaterThanOrEqual(0);
+            expect(synced).toBeLessThan(unlinkAt);
+        }
+        expect(events.slice(0, unlinkAt).some(event => event.startsWith("syncdir:"))).toBe(true);
+        expect(events.slice(unlinkAt + 1).some(event => event.startsWith("syncdir:"))).toBe(true);
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+    } finally {
+        fileSpy.mockRestore();
+        dirSpy.mockRestore();
+        unlinkSpy.mockRestore();
+    }
+});
+
+test("a failed payload flush rolls the created files back", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    const atomic = require("./atomicWrite");
+    const realSyncFile = atomic.syncFile.bind(atomic);
+    const spy = jest.spyOn(atomic, "syncFile").mockImplementation(async (file: unknown) => {
+        if (String(file).endsWith(join("models", "shape.bin"))) throw Object.assign(new Error("flush failed"), { code: "EIO" });
+        return realSyncFile(file);
+    });
+    try {
+        await expect(copy()).rejects.toThrow("flush failed");
+        expect(existsSync(join(dest, "models"))).toBe(false);
+        expect(existsSync(join(dest, "color.png"))).toBe(false);
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+        expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+    } finally { spy.mockRestore(); }
+});
+
+test("a refused directory flush still finishes the copy without claiming that checkpoint", async () => {
+    const atomic = require("./atomicWrite");
+    const spy = jest.spyOn(atomic, "syncDirectory").mockResolvedValue(false);
+    try {
+        await copy();
+        expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+    } finally { spy.mockRestore(); }
 });
 
 test("the 32-level cap stops graph discovery before writing destination files", async () => {

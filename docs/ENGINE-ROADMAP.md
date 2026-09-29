@@ -90,7 +90,7 @@ The former Morphic engine remains a preserved reference, not a second production
 | WebGL 3D, picking, PBR textures, shadows and HDR environment lighting | Not scene-dependent global illumination, virtualized geometry or a modern high-end render pipeline |
 | Imported glTF TRS and morph animation, CPU skinning, 16-joint GPU skinning and two-pose blending | Not full animation graphs, events, root motion or character production tools |
 | 2D/3D gameplay rules, interactions, bounded spawning, checkpoints and current-level progress | Not a general behavior lifecycle, full prefab system, production physics or multiplayer |
-| Dependency-aware Save As, recovery checkpoints, browser restore, desktop crash/relaunch, and dependency-folder rollback | Power-loss durability is not guaranteed. A killed copy is repaired from its journal on the next cross-folder Save As |
+| Dependency-aware Save As, recovery checkpoints, browser restore, desktop crash/relaunch, dependency-folder rollback, directory fsync when the platform allows it, and stale atomic-temp cleanup | Power-loss durability is not guaranteed. A killed copy is repaired from its journal on the next cross-folder Save As. Process-kill tests do not prove a power loss |
 | Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Clean-profile acceptance, custom fonts, unsigned provenance, embedded cues and screen-space text; separate Windows clean-machine certification and broader runtime coverage remain open |
 | Tests, Electron smokes and CPU/GPU benchmarks | Hardware-specific, bounded fixtures; not a broad compatibility or scalability certification |
 
@@ -302,7 +302,7 @@ Full comparison includes much more than collision detection; see [Epic physics](
 
 ### ENG-07 — Player saves and project resilience
 
-**State:** editor recovery restores in the browser, relaunches after a killed desktop session, and rolls back a failed dependency copy. Power-loss durability and player-save crash acceptance remain separate.
+**State:** editor recovery restores in the browser, relaunches after a killed desktop session, and rolls back a failed dependency copy. Atomic replacement now fsyncs the parent directory when the platform allows it, and a stale temporary file from an unclean shutdown is removed on the next replacement. Power-loss durability and player-save crash acceptance remain separate.
 **Phases:** F2/F3 and continuous hardening. **Role:** storage/runtime engineering.
 
 - **First slice:** versioned player-save model, settings and profiles in user-writable storage
@@ -310,7 +310,8 @@ Full comparison includes much more than collision detection; see [Epic physics](
   last valid save. Specify checkpoint/session/level persistence and stable cross-level references.
 - **Expansion:** save slots, import/export saves and optional cloud conflict handling. Browser
   recovery restore, desktop crash/relaunch automation and transactional dependency-copy cleanup
-  are delivered for editor projects. Power-loss durability is still not claimed.
+  are delivered for editor projects, along with directory-fsync checkpoints and stale-temp cleanup.
+  Power-loss durability is still not claimed.
   Cloud services are not required for offline games and require separate approval.
 - **Depends:** ENG-03 lifetimes, ENG-18 safe storage and ENG-19 failure injection.
 - **Acceptance:** progress survives exit/relaunch and a level round trip; corrupted/future-version

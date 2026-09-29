@@ -95,8 +95,9 @@ the 3D player paused for explicit Resume. Progress errors are visible in a separ
 Desktop players have a new, narrow preload with only `playerProgress.read()` and `.write(content)`.
 The main process verifies the owning main frame and game URL, and selects a hash-named save slot
 under the app's user-data `player-progress` directory. The renderer cannot choose a path, game ID
-or IPC channel. Writes use the existing flushed-temporary-file/atomic-rename helper; failed writes
-do not deliberately truncate the previous slot. This is not a power-loss durability guarantee.
+or IPC channel. Writes use the existing flushed-temporary-file/atomic-rename helper, which also flushes the
+parent directory when the platform allows it. Failed writes do not deliberately truncate the
+previous slot. This is not a power-loss durability guarantee.
 The sandbox, context isolation, navigation/network denial and absence of editor APIs remain.
 This follows [Electron's per-operation bridge guidance](https://www.electronjs.org/docs/latest/tutorial/context-isolation#security-considerations).
 

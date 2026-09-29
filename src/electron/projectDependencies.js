@@ -1,12 +1,13 @@
 /**
  * @module projectDependencies
  * @description Relocates bounded linked-level graphs, relative images and 3D sidecars without copying unreferenced packs or overwriting conflicting files.
- * An incomplete copy deletes only the destination files and directories that copy created. A killed copy leaves a journal the next cross-folder Save As rolls back. Power loss during the journal write is not a durability claim.
+ * An incomplete copy deletes only the destination files and directories that copy created. A killed copy leaves a journal the next cross-folder Save As rolls back.
+ * Created files are flushed before that journal is removed. An unclean journal write's temporary file is removed on the next rollback. Power-loss durability is not claimed.
  */
 const fs = require("fs");
 const path = require("path");
 const { resolveConfined } = require("./confine");
-const { atomicWrite } = require("./atomicWrite");
+const atomic = require("./atomicWrite");
 
 const DEPENDENCY_JOURNAL_NAME = ".fogworks-dependency-journal.json";
 
@@ -31,6 +32,7 @@ function assertJournalRelative(relative) {
  */
 async function rollbackDependencyJournal(destinationRoot) {
     const journalFile = journalPath(destinationRoot);
+    await atomic.reapStaleAtomicTemps(journalFile);
     let raw;
     try { raw = await fs.promises.readFile(journalFile, "utf8"); }
     catch (error) { if (error.code === "ENOENT") return false; throw error; }
@@ -55,7 +57,26 @@ async function rollbackDependencyJournal(destinationRoot) {
         });
     }
     await fs.promises.unlink(journalFile);
+    // The names are gone from this process. A refused directory flush is not a power-loss checkpoint.
+    await atomic.syncDirectory(destinationRoot);
     return true;
+}
+
+/** Flush bytes we created, then their directory entries, before the journal may be removed. */
+async function flushCreatedDependencies(destinationRoot, journal) {
+    for (const relative of journal.files) {
+        const target = resolveConfined(destinationRoot, destinationRoot, relative, "a destination dependency");
+        await atomic.syncFile(target);
+    }
+    const directories = new Set([destinationRoot]);
+    for (const relative of journal.directories) {
+        directories.add(resolveConfined(destinationRoot, destinationRoot, relative, "a destination directory"));
+    }
+    for (const relative of journal.files) {
+        directories.add(path.dirname(resolveConfined(destinationRoot, destinationRoot, relative, "a destination dependency")));
+    }
+    const ordered = [...directories].sort((left, right) => right.length - left.length);
+    for (const directory of ordered) await atomic.syncDirectory(directory);
 }
 
 /** Discover all dependencies before creating destination directories or files. */
@@ -205,9 +226,9 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
     }
     if (directories.length === 0 && planned.length === 0) return;
     const journal = { version: 1, directories: [...directories], files: planned.map(item => item.relative) };
-    const persistJournal = () => atomicWrite(journalPath(destinationRoot), JSON.stringify(journal));
-    await persistJournal();
+    const persistJournal = () => atomic.atomicWrite(journalPath(destinationRoot), JSON.stringify(journal));
     try {
+        await persistJournal();
         for (const relative of [...directories]) {
             const parentRelative = path.dirname(relative);
             const parent = parentRelative === "."
@@ -241,6 +262,9 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
                 }
             }
         }
+        await flushCreatedDependencies(destinationRoot, journal);
+        await fs.promises.unlink(journalPath(destinationRoot));
+        await atomic.syncDirectory(destinationRoot);
     } catch (error) {
         try { await rollbackDependencyJournal(destinationRoot); }
         catch (rollbackError) {
@@ -248,6 +272,5 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
         }
         throw error;
     }
-    await fs.promises.unlink(journalPath(destinationRoot));
 }
 module.exports = { copyProjectDependencies, rollbackDependencyJournal, DEPENDENCY_JOURNAL_NAME };

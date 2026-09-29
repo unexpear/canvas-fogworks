@@ -2736,7 +2736,10 @@ interface ElectronAPI {
 undefined (browser build). Main process (`electron/main.js`) owns the window, menu,
 Open/Save dialogs, and the `"save-file"` IPC handler. Project saves and both export writers use
 `electron/atomicWrite`: a sibling exclusive-create temporary file is written, synced and closed
-before a rename replaces the destination, so a failed write leaves the previous file intact.
+before a rename replaces the destination, then the parent directory is synced when the platform
+allows it. A failed write before that rename leaves the previous file intact. The directory
+sync result is not a power-loss proof. The next replacement removes a stale sibling temporary
+file left by an unclean shutdown.
 
 ## Build (`scripts/build.js`)
 
