@@ -163,6 +163,9 @@ import { emitRotateGizmo3D, emitScaleGizmo3D, emitTranslateGizmo3D } from "../re
 import { Spatial3D } from "../core/document/Spatial3D";
 import { interact3D } from "../core/runtime/Gameplay3D";
 import { interactGameplay2D } from "../core/runtime/GameplaySession";
+import { InputActions, ActionBindings } from "../core/runtime/InputActions";
+import { browserInputStorage, eventCode, platformerInput, readInputSettings, spatialInput } from "../core/runtime/InputSettings";
+import { InputSettingsHost } from "./InputSettingsHost";
 import { SetSpatial3DAction } from "../core/actions/SetSpatial3DAction";
 import { dollyCamera3D, orbitCamera3D, panCamera3D } from "../renderer/CameraOrbit3D";
 import { RuntimeControls, Workspace, WorkspaceControls, WORKSPACES } from "./AppShellControls";
@@ -632,6 +635,13 @@ export function App() {
         editorStateRef.current.frame = frameOnLoad(initialDocument ?? {});
     }
     const es = editorStateRef.current;
+    const [controlsOpen, setControlsOpen] = useState(false);
+    const inputActionsRef = useRef<InputActions | null>(null);
+    if (!inputActionsRef.current) inputActionsRef.current = new InputActions(readInputSettings(browserInputStorage()));
+    const applyInputBindings = useCallback((bindings: ActionBindings) => {
+        inputActionsRef.current!.rebind(bindings);
+        es.input = platformerInput(inputActionsRef.current!);
+    }, [es]);
 
     const dispatcherRef = useRef<ActionDispatcher | null>(null);
     if (!dispatcherRef.current) {
@@ -1259,53 +1269,29 @@ export function App() {
             if (gizmoDrag3dRef.current) { gizmoDrag3dRef.current = null; e.preventDefault(); return; }
             toolController.onMouseUp(e);
         };
-        /**
-         * Which intent a physical key is (M18 slice 2), or null for one the game does not use.
-         *
-         * BOTH THE ARROWS AND WASD, because a level gets tested by whoever is nearest the keyboard
-         * and neither layout is a decision worth making for them. `Space` is a third jump key for
-         * the same reason. None of it is configurable yet — that is a settings surface, and this
-         * slice is the loop.
-         */
-        const intentFor = (key: string): "left" | "right" | "jump" | "run" | "down" | null => {
-            // SHIFT IS RUN (M18 slice 38) — the same reasoning as the three keys above: both
-            // shifts, so neither hand's layout is a decision made for the player.
-            if (key === "Shift") return "run";
-            // DOWN IS THE PIPE'S BUTTON (M18 slice 39), on both layouts like everything else.
-            if (key === "ArrowDown" || key === "s" || key === "S") return "down";
-            switch (key) {
-                case "ArrowLeft": case "a": case "A": return "left";
-                case "ArrowRight": case "d": case "D": return "right";
-                case "ArrowUp": case "w": case "W": case " ": return "jump";
-                default: return null;
-            }
-        };
+        const syncPlayInput = () => { es.input = platformerInput(inputActionsRef.current!); };
         const handleKeyDown = (e: KeyboardEvent) => {
             // WHILE PLAYING THE KEYBOARD IS THE GAME'S, and it takes the key before any shortcut
             // sees it. THE COLLISION IS THE ARROWS, and it is not a tidiness question: an arrow is
             // "Nudge by 1", which dispatches a real `TransactionAction` and EDITS THE DOCUMENT.
             // Walking a character right would move the level's art one pixel per press and leave
             // the undo stack full of it — the exact thing this runtime is built not to do.
-            // Verified live, both halves: five presses while stopped moved the crate 268 -> 273,
-            // and the same key while playing walked the body 132px and left the document alone.
-            // (WASD and Space collide with nothing today; they are here because a level gets
-            // tested by whoever is nearest the keyboard.)
-            // Typing in a panel still wins over both — a name field is a name field.
-            if (es.playing && !isTypingTarget(e.target as HTMLElement)) {
-                if ((e.code === "KeyF" || e.key.toLowerCase() === "f") && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                    e.preventDefault();
-                    if (!e.repeat) {
+            // Named actions come from the Controls panel. A key held across Stop, rebind or blur
+            // is cleared so it cannot keep walking. Typing in a panel still wins — a name field
+            // is a name field. Capture for rebinding sets `data-input-capturing` and consumes
+            // the key before this handler.
+            if (document.body.dataset.inputCapturing === "1") return;
+            if (es.playing && !isTypingTarget(e.target as HTMLElement) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                const code = eventCode(e);
+                if (code && inputActionsRef.current!.setKey(code, true)) {
+                    syncPlayInput();
+                    if (inputActionsRef.current!.pressed("interact")) {
                         const runtimeDoc = runtimeProjectRef.current.document ?? dispatcher.getDocument();
                         const player = playerEntityId(runtimeDoc.nodes.values());
                         if (world3dRef.current && workspaceRef.current.id === "3d" && player) world3dRef.current = interact3D(runtimeDoc, world3dRef.current, player);
                         else if (es.world) { const result = interactGameplay2D(runtimeDoc, es.world, player); es.world = result.world; result.sounds.forEach(sound => { void audioRef.current?.play(sound); }); }
                         refresh();
                     }
-                    return;
-                }
-                const intent = intentFor(e.key);
-                if (intent) {
-                    es.input = { ...es.input, [intent]: true };
                     e.preventDefault();
                     return;
                 }
@@ -1378,10 +1364,11 @@ export function App() {
             // RELEASED EVEN IF THE PRESS WAS NOT OURS. A key held while Play was pressed, or held
             // across a click into a panel, must still clear — a stuck "right" walks the body into
             // a wall forever with nothing on screen to say why.
-            const intent = intentFor(e.key);
-            if (intent) es.input = { ...es.input, [intent]: false };
+            const code = eventCode(e);
+            if (code && inputActionsRef.current!.setKey(code, false)) syncPlayInput();
             toolController.onKeyUp(e);
         };
+        const releaseHeldInput = () => { inputActionsRef.current!.clear(); syncPlayInput(); };
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
             const rect = target.getBoundingClientRect();
@@ -1411,6 +1398,7 @@ export function App() {
         window.addEventListener("mouseup", handleMouseUp);
         window.addEventListener("keydown", handleKeyDown);
         window.addEventListener("keyup", handleKeyUp);
+        window.addEventListener("blur", releaseHeldInput);
         target.addEventListener("wheel", handleWheel, { passive: false });
 
         return () => {
@@ -1420,6 +1408,7 @@ export function App() {
             window.removeEventListener("mouseup", handleMouseUp);
             window.removeEventListener("keydown", handleKeyDown);
             window.removeEventListener("keyup", handleKeyUp);
+            window.removeEventListener("blur", releaseHeldInput);
             target.removeEventListener("wheel", handleWheel);
         };
     }, [toolController]);
@@ -1453,10 +1442,7 @@ export function App() {
             let played: ReadonlyDocument = timed;
             if (es.playing && workspace === "3d" && world3dRef.current) {
                 const now3d = Date.now(), last3d = world3dLastAtRef.current ?? now3d;
-                const inputs3d = es.controlled ? new Map([[es.controlled, {
-                    x: (es.input.right ? 1 : 0) - (es.input.left ? 1 : 0), y: 0,
-                    z: (es.input.down ? 1 : 0) - (es.input.jump ? 1 : 0), speed: es.input.run ? 7 : 4
-                }]]) : new Map();
+                const inputs3d = es.controlled ? new Map([[es.controlled, spatialInput(inputActionsRef.current!)]]) : new Map();
                 world3dRef.current = advanceWorld3D(base, world3dRef.current,
                     (now3d - last3d) / 1000, inputs3d);
                 world3dLastAtRef.current = now3d;
@@ -2674,7 +2660,8 @@ export function App() {
         es.controlled = es.playing
             ? (playerEntityId(dispatcher.getDocument().nodes.values()) ?? es.selectedNodeIds[0] ?? null)
             : null;
-        es.input = { left: false, right: false, jump: false };
+        inputActionsRef.current?.clear();
+        es.input = platformerInput(inputActionsRef.current!);
         setLastEvent(null);
         setRunOutcome(null);
         runOutcomeRef.current = null;
@@ -2826,6 +2813,14 @@ export function App() {
                     onRestart={restartRuntime}
                     onRespawn={respawnRuntime}
                 />
+                <button type="button" aria-expanded={controlsOpen} aria-controls="editor-input-settings"
+                    title="Rebind named gameplay controls" onClick={() => setControlsOpen(open => !open)}
+                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4 }}>Controls</button>
+                {controlsOpen && <div id="editor-input-settings" role="region" aria-label="Input settings"
+                    style={{ position: "fixed", top: 46, right: 12, zIndex: 30, background: "#1c1c33", color: "#eee",
+                        border: "1px solid #444", padding: 8, maxWidth: 380, maxHeight: "70vh", overflow: "auto" }}>
+                    <InputSettingsHost onChange={applyInputBindings} />
+                </div>}
                 <Divider />
                 {ui.truncated && (
                     // Only shown once history actually truncated: undo now stops at the

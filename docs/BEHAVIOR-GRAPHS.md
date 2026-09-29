@@ -213,10 +213,10 @@ Current follow-up tests cover delay/repeat parity in both runtimes, v1/v2 progre
 validation, breakpoint/step/pause semantics, cancellation, bounded queues/execution and asset undo.
 The graph-authoring smoke also exercises delay/repeat authoring and shared-asset promotion/detach.
 
-Further ENG-04/Q06 work: input settings UI, full prefabs, cross-build save migrations,
+Further ENG-04/Q06 work: full prefabs, cross-build save migrations,
 crash/relaunch acceptance, cross-project asset management, script/graph equivalence and a
-freeform wiring canvas. Lifecycle events, typed variables, callable functions and visited-level
-campaign saves are delivered. General NPC behavior trees remain separate work.
+freeform wiring canvas. Lifecycle events, typed variables, callable functions, visited-level
+campaign saves and named-input controls are delivered. General NPC behavior trees remain separate work.
 
 Implementation references: [React immutable array updates](https://react.dev/learn/updating-arrays-in-state),
 [React useId](https://react.dev/reference/react/useId),

@@ -1,8 +1,8 @@
 # Animation workflow
 
 <!-- describes: src/core/document/AnimationController.ts, src/core/runtime/AnimationPlayback.ts, src/core/runtime/AnimationWorld.ts, src/app/AnimationPanel.tsx, src/app/App.tsx -->
-<!-- re-read 2026-09-28: App.tsx still wires clip playback. The folders drawer moved to
-     FoldersDrawer.tsx and does not change animation authoring or runtime sampling.
+<!-- re-read 2026-09-28: App.tsx still wires clip playback. The Controls panel rebinds named
+     gameplay keys and does not change animation authoring or runtime sampling.
      App.tsx now restores browser and desktop recovery snapshots. Clip authoring, preview, and runtime controllers are unchanged. -->
 
 Delivered in schema 77: named timeline clips, preview and per-node runtime controllers,

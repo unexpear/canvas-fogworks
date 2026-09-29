@@ -138,6 +138,7 @@ test("custom fonts are packaged from a directory or payload and provenance omits
     expect(JSON.stringify(provenance)).not.toContain(temp);
     const html = game3DHtml(serialized, Buffer.from("/* owned player */"), provenance);
     expect(html).toContain("font-src data: blob:"); expect(html).toContain('id="diagnostics"');
+    expect(html).toContain('id="input-settings"'); expect(html).toContain('id="input-summary"');
     expect(html).toContain(provenance.manifestSha256);
     expect(() => game3DHtml(serialized, Buffer.from("/* owned player */"), { ...provenance, manifestSha256: "a".repeat(64) })).toThrow("Provenance");
     const payload = fontPayloadsFromJson([{ data: Buffer.from(ownedTestFont("Owned Face")).toString("base64") }]);

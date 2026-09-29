@@ -1,8 +1,8 @@
 # 3D Foundation — adoption plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
-<!-- re-read 2026-09-28: runtime test files only widened their shell source pins to include
-     FoldersDrawer.tsx. 3D document, import and renderer behavior is unchanged. -->
+<!-- re-read 2026-09-28: runtime now stores named keyboard bindings for play. Meshes, lighting,
+     collision and import behavior are unchanged. -->
 
 ## Decision
 

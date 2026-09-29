@@ -23,8 +23,8 @@ for limits and verification; this does not complete the broader engine milestone
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
-<!-- re-read 2026-09-28: shell source pins under src/core now include FoldersDrawer.tsx.
-     Milestone status and historical slice counts are unchanged.
+<!-- re-read 2026-09-28: named-input Controls live under src/core and do not change milestone
+     status or historical slice counts. Shell source pins include FoldersDrawer.tsx.
      Exact history retention and SCALE-001 benchmark scenes do not change historical milestone status. Budgets stay in PRODUCTION-WORK.md. -->
 <!-- re-read 2026-09-03: summary reconciled through schema 76 and the 3D production/runtime baseline. -->
 <!-- re-read 2026-08-14 after M18 slice 9 (body-vs-body contact): the runtime section below is current, including the

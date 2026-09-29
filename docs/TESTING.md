@@ -39,6 +39,8 @@ history JSON retention. `npm run test:benchmark-budgets` locks the budget formul
 and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- re-read 2026-09-28: player HTML and the 3D host expose named-input Controls. The Jest contract
+     and shell source pins are otherwise unchanged. -->
 <!-- re-read 2026-09-28 after the folders-drawer extraction: shell source pins now include
      FoldersDrawer.tsx, and the new jsdom suite drives its import, asset and export controls.
      The rest of this testing contract is unchanged.

@@ -22,6 +22,8 @@ test("HTML uses a self-contained player and escapes closing-script injection", (
     const html = gameHtml({ entry: "first", levels: { first: { content, links: {} } } }, "AA==");
     expect(html).not.toContain("<script>alert(1)");
     expect(html).toContain("data:text/javascript;base64,AA==");
+    expect(html).toContain('id="input-settings"');
+    expect(html).toContain('id="input-summary"');
     expect(html).toContain("connect-src 'none'");
 });
 test("unpackaged transitions and nonportable image URLs block export", () => {

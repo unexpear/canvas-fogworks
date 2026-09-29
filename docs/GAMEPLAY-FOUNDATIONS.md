@@ -48,11 +48,17 @@ Spawned actors do not receive a separate start-event lifecycle yet.
 `InputActions` maps host key codes to named actions and exposes held, consume-once pressed/released
 edges, opposing-key axes, clear and validated rebind operations. Aliased keys count as one action;
 repeated keydown does not trigger another interaction. Clearing or rebinding drops held keys and
-pending edges. Both standalone players use it; editor Play also routes F into the shared interaction
-functions while retaining its existing movement/shortcut handling.
+pending edges. Both standalone players and editor Play read it. Editor shortcuts still win when
+the key is not bound, a text field is focused, or Ctrl, Alt or Command is held.
 
-The default actions include movement, jump, run and interact. Rebinding is a reusable API, not yet
-an end-user controls/settings UI. Gamepads, touch and configurable action assets are later work.
+The default actions include movement, jump, run and interact. Editor Play and both standalone
+players share a Controls panel that lists those actions, captures the next physical key, and
+refuses to remove an action's last key. Version 1 bindings are stored in the host's
+`localStorage` under `canvas-fogworks.input-settings.v1`, outside the document schema. Malformed
+or newer payloads are ignored and the built-in bindings stay in effect. Rebinding and focus loss
+clear held keys. ArrowUp remains on both Move forward and Jump; the panel names that overlap
+instead of silently splitting it. Editor Play uses these same named actions, so W is Move forward
+in 3D and is not an extra 2D jump key. Gamepads, touch and per-game action assets remain later work.
 Physical `KeyboardEvent.code` bindings follow key position, not the printed character on every
 keyboard layout; see [browser key-code behavior](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code).
 
@@ -113,7 +119,7 @@ build and file-workflow/level/authoring/player smokes pass. A new unsigned Windo
 owned demo at `release/gameplay-foundation-20260912/desktop/win-unpacked/` also passes the
 actual executable startup smoke. These are host-machine results, not clean-machine certification.
 
-Still open in Q06/F2: user-facing input mapping, full prefab instances, cross-build save migrations,
+Still open in Q06/F2: full prefab instances, cross-build save migrations,
 richer character/physics semantics, 3D audio, portable/browser save UX and full process-crash/relaunch
 acceptance. Visited-level campaign saves do not by themselves prove a writer crash or a fresh process.
 F1 clean-machine certification is also still open. Existing installers/assets are retained.

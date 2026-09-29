@@ -4,15 +4,14 @@
  */
 import { PlayerSession3D } from "../runtime/PlayerSession3D";
 import { disposeWebGL3D, emitWebGL3D, lastWebGL3DFailure } from "../renderer/emitWebGL3D";
-import { InputActions, PLAYER_ACTIONS } from "../core/runtime/InputActions";
+import { ActionBindings, InputActions, PLAYER_ACTIONS } from "../core/runtime/InputActions";
+import { browserInputStorage, eventCode, inputBindingsInclude, inputSettingsSummary, readInputSettings, spatialInput, writeInputSettings } from "../core/runtime/InputSettings";
+import { mountInputSettings } from "../core/runtime/InputSettingsView";
 import type { ProgressStore } from "../runtime/ProgressStore";
 
-const movementKeys = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"]);
-export function playerInput3D(keys: ReadonlySet<string>) {
-    const actions = new InputActions(PLAYER_ACTIONS); keys.forEach(key => actions.setKey(key,true)); return actionInput3D(actions);
+export function playerInput3D(keys: ReadonlySet<string>, bindings: ActionBindings = PLAYER_ACTIONS) {
+    const actions = new InputActions(bindings); keys.forEach(key => actions.setKey(key,true)); return spatialInput(actions);
 }
-function actionInput3D(actions: InputActions) { return { x: actions.axis("left","right"), y: actions.axis("down","up"),
-    z: actions.axis("forward","back"), speed: actions.held("run") ? 7 : 4 }; }
 
 export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): () => void {
     const canvas = document.getElementById("scene") as HTMLCanvasElement;
@@ -21,7 +20,13 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
     const pause = document.getElementById("pause") as HTMLButtonElement;
     const stop = document.getElementById("stop") as HTMLButtonElement;
     const retry = document.getElementById("retry") as HTMLButtonElement;
-    const keys = new InputActions(PLAYER_ACTIONS); let disposed = false, scheduled = 0, renderError: string | null = null, epoch = 0, saving = false;
+    let bindings = readInputSettings(browserInputStorage());
+    const keys = new InputActions(bindings); let disposed = false, scheduled = 0, renderError: string | null = null, epoch = 0, saving = false;
+    const publishInputSummary = () => {
+        const summary = document.getElementById("input-summary");
+        if (summary) summary.textContent = `${inputSettingsSummary(bindings)} Focus loss pauses; use Resume to continue.`;
+    };
+    publishInputSummary();
     const listeners: (() => void)[] = [];
     function on(target: EventTarget, type: string, handler: (event: any) => void) {
         target.addEventListener(type, handler); listeners.push(() => target.removeEventListener(type, handler));
@@ -49,14 +54,32 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
         epoch++; keys.clear(); session.stop(); renderError = null; disposeWebGL3D(canvas); canvas.width = canvas.width; update();
     });
     on(retry, "click", () => { void load(() => { session.resume(); return session.followTransition(); }); });
+    const inputButton = document.getElementById("input-settings");
+    const inputPanel = document.getElementById("input-settings-panel");
+    if (inputButton && inputPanel) {
+        on(inputButton, "click", () => {
+            const open = inputPanel.hidden;
+            inputPanel.hidden = !open;
+            inputButton.setAttribute("aria-expanded", String(open));
+        });
+        const settings = mountInputSettings(inputPanel, { bindings, onChange(next) {
+            const storage = browserInputStorage();
+            if (!storage) throw new Error("This browser cannot store control settings.");
+            writeInputSettings(storage, next);
+            bindings = next; keys.rebind(next); publishInputSummary();
+        } });
+        listeners.push(() => settings.dispose());
+    }
     on(window, "keydown", (event: KeyboardEvent) => {
-        if ((!movementKeys.has(event.code) && event.code !== "KeyF") || session.status !== "running") return;
+        if (document.body.dataset.inputCapturing === "1" || session.status !== "running") return;
         if ((event.target as HTMLElement)?.closest?.("input,select,textarea,[contenteditable=true]")) return;
         if (event.ctrlKey || event.altKey || event.metaKey) return;
-        event.preventDefault(); keys.setKey(event.code,true);
+        const code = eventCode(event);
+        if (!code || !inputBindingsInclude(bindings, code)) return;
+        event.preventDefault(); keys.setKey(code, true);
         if (keys.pressed("interact")) session.interact();
     });
-    on(window, "keyup", (event: KeyboardEvent) => { keys.setKey(event.code,false); });
+    on(window, "keyup", (event: KeyboardEvent) => { const code = eventCode(event); if (code) keys.setKey(code, false); });
     for (const id of ["checkpoint","respawn","save-progress","load-progress"]) {
         const button = document.getElementById(id) as HTMLButtonElement | null; if (!button) continue;
         on(button,"click", async () => {
@@ -88,7 +111,7 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
         if (disposed) return;
         try {
             if (!renderError) {
-                session.advance(timestamp, actionInput3D(keys));
+                session.advance(timestamp, spatialInput(keys));
                 if (session.status === "running" && session.world?.transitionTo && !session.error) {
                     void load(() => session.followTransition());
                 }

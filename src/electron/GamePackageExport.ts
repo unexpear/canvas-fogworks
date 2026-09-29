@@ -264,9 +264,10 @@ export function game3DHtml(serialized: string, bundle: Buffer, provenance?: Game
 <p id="status" role="status" aria-live="polite">Checking package…</p>
 <p id="diagnostics" role="status" hidden></p>
 <p id="fonts" hidden></p>
-<header><button id="checkpoint">Set checkpoint</button><button id="respawn">Respawn</button><button id="save-progress">Save progress</button><button id="load-progress">Load progress</button><span id="progress-note" role="status"></span></header>
+<header><button id="checkpoint">Set checkpoint</button><button id="respawn">Respawn</button><button id="save-progress">Save progress</button><button id="load-progress">Load progress</button><button id="input-settings" type="button" aria-expanded="false" aria-controls="input-settings-panel">Controls</button><span id="progress-note" role="status"></span></header>
+<div id="input-settings-panel" hidden></div>
 <canvas id="scene" tabindex="0" aria-label="3D game viewport"></canvas>
-<p>WASD / arrows: move · Q/E: down/up · Shift: faster · F: interact. Focus loss pauses; use Resume to continue.</p>
+<p id="input-summary">WASD / arrows: move · Q/E: down/up · Shift: faster · F: interact. Focus loss pauses; use Resume to continue.</p>
 <script id="game-provenance" type="application/json">${report}</script>
 <script id="game-data" type="application/octet-stream" data-sha256="${digest}">${Buffer.from(serialized).toString("base64")}</script>
 <script src="data:text/javascript;base64,${bundle.toString("base64")}"></script></body></html>`;

@@ -7,7 +7,9 @@ import { deserializeDocument } from "../core/document/Serializer";
 import { playerEntityId } from "../core/document/Entity";
 import { applyAnimations } from "../core/runtime/AnimationPlayback";
 import { stepGameplay, interactGameplay2D } from "../core/runtime/GameplaySession";
-import { InputActions, PLAYER_ACTIONS } from "../core/runtime/InputActions";
+import { InputActions } from "../core/runtime/InputActions";
+import { browserInputStorage, eventCode, inputSettingsSummary, platformerInput, readInputSettings, writeInputSettings } from "../core/runtime/InputSettings";
+import { mountInputSettings } from "../core/runtime/InputSettingsView";
 import { captureProgress2D, parseProgress, restoreProgress2D, serializeProgress } from "../runtime/PlayerProgress";
 import { CampaignState, EDITOR_CAMPAIGN_GAME_ID, campaignFromProgress, emptyCampaign, openCampaignLevel, rememberLeavingLevel, withCampaign } from "../runtime/CampaignProgress";
 import { browserProgressStore } from "../runtime/ProgressStore";
@@ -27,7 +29,28 @@ let level = game.entry, doc = deserializeDocument(game.levels[level].content), w
 let campaign: CampaignState = emptyCampaign();
 let controlled = playerEntityId(doc.nodes.values());
 let input = { ...NO_INPUT }, running = false, last = performance.now(), accumulator = 0;
-const actions = new InputActions(PLAYER_ACTIONS); let generation = 0;
+let bindings = readInputSettings(browserInputStorage());
+const actions = new InputActions(bindings); let generation = 0;
+function publishInputSummary() {
+    const summary = document.getElementById("input-summary");
+    if (summary) summary.textContent = inputSettingsSummary(bindings);
+}
+publishInputSummary();
+const inputButton = document.getElementById("input-settings");
+const inputPanel = document.getElementById("input-settings-panel");
+if (inputButton && inputPanel) {
+    inputButton.addEventListener("click", () => {
+        const open = inputPanel.hidden;
+        inputPanel.hidden = !open;
+        inputButton.setAttribute("aria-expanded", String(open));
+    });
+    mountInputSettings(inputPanel, { bindings, onChange(next) {
+        const storage = browserInputStorage();
+        if (!storage) throw new Error("This browser cannot store control settings.");
+        writeInputSettings(storage, next);
+        bindings = next; actions.rebind(next); input = platformerInput(actions); publishInputSummary();
+    } });
+}
 const gameId = (async () => crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(game))))()
     .then(bytes => [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2,"0")).join(""));
 // Attach a rejection handler immediately; a storage action still reports the original error.
@@ -62,19 +85,15 @@ document.getElementById("respawn")!.addEventListener("click", () => {
     audio.unlock(); audio.stop(); world = respawnRun(doc, world, controlled); running = true; accumulator = 0; last = performance.now();
 });
 function key(event: KeyboardEvent, down: boolean) {
-    const fallback: Record<string,string> = { a:"KeyA", d:"KeyD", s:"KeyS", f:"KeyF", " ":"Space", Shift:"ShiftLeft" };
-    const code = event.code || fallback[event.key] || event.key;
-    if (actions.setKey(code,down)) {
-        input = { left: actions.held("left"), right: actions.held("right"), jump: actions.held("jump"), down: actions.held("back"), run: actions.held("run") };
-        if (running && actions.pressed("interact")) {
-            const result = interactGameplay2D(doc,world,controlled); world = result.world;
-            result.sounds.forEach(sound => { void audio.play(sound); });
-        }
-        event.preventDefault(); return;
+    if (document.body.dataset.inputCapturing === "1") return;
+    const code = eventCode(event);
+    if (!code || !actions.setKey(code, down)) return;
+    input = platformerInput(actions);
+    if (running && down && actions.pressed("interact")) {
+        const result = interactGameplay2D(doc,world,controlled); world = result.world;
+        result.sounds.forEach(sound => { void audio.play(sound); });
     }
-    const mapping: Record<string, keyof typeof input> = { ArrowLeft: "left", a: "left", ArrowRight: "right", d: "right", " ": "jump", ArrowUp: "jump", ArrowDown: "down", s: "down", Shift: "run" };
-    const field = mapping[event.key.length === 1 ? event.key.toLowerCase() : event.key];
-    if (field) { event.preventDefault(); input[field] = down; }
+    event.preventDefault();
 }
 window.addEventListener("keydown", event => key(event, true));
 window.addEventListener("keyup", event => key(event, false));

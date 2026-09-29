@@ -68,7 +68,8 @@ service or publisher identity was added. Only original repository fixtures were 
 ## Controls and lifecycle
 
 - WASD/arrows move on X/Z; Q/E move down/up. Shift increases speed from 4 to 7.
-  These are the current bounded runtime controls, not a full character controller or jump system.
+  Controls opens the named-input panel; changed keys are stored for this origin and cleared on
+  focus loss. These are the current bounded runtime controls, not a full character controller or jump system.
 - Restart reloads the entry. Stop releases the session/GPU resources; Start creates a fresh run.
 - F interacts with the nearest eligible target. Set checkpoint/Respawn preserve current-level
   runtime mutations; Save progress/Load progress use a versioned, package-bound slot. Restore

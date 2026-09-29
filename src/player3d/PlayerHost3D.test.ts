@@ -6,6 +6,7 @@ import { disposeWebGL3D, emitWebGL3D } from "../renderer/emitWebGL3D";
 jest.mock("../renderer/emitWebGL3D", () => ({ emitWebGL3D: jest.fn(() => true), disposeWebGL3D: jest.fn(), lastWebGL3DFailure: () => "GPU unavailable" }));
 let session: any, tick: FrameRequestCallback, dispose: () => void;
 beforeEach(() => {
+    localStorage.clear();
     jest.clearAllMocks(); (emitWebGL3D as jest.Mock).mockReturnValue(true);
     document.body.innerHTML = '<button id="start"></button><button id="pause"></button><button id="stop"></button><button id="retry"></button><p id="status"></p><canvas id="scene"></canvas>';
     window.requestAnimationFrame = jest.fn(callback => { tick = callback; return 1; }); window.cancelAnimationFrame = jest.fn();
@@ -57,6 +58,24 @@ test("pagehide disposes once, cancels frames and removes event listeners", () =>
 test("F is edge-triggered across repeated keydown events", () => {
     session.interact=jest.fn();key("keydown","KeyF");key("keydown","KeyF");expect(session.interact).toHaveBeenCalledTimes(1);
     key("keyup","KeyF");key("keydown","KeyF");expect(session.interact).toHaveBeenCalledTimes(2);
+});
+test("rebinding a named action replaces that key and blur still clears it", () => {
+    dispose();
+    session.status = "running";
+    document.body.insertAdjacentHTML("beforeend", '<button id="input-settings" type="button" aria-expanded="false"></button><div id="input-settings-panel" hidden></div><p id="input-summary"></p>');
+    dispose = mountPlayer3D(session as PlayerSession3D);
+    (document.getElementById("input-settings") as HTMLButtonElement).click();
+    expect((document.getElementById("input-settings-panel") as HTMLElement).hidden).toBe(false);
+    (document.querySelector('[aria-label="Add a key for Move right"]') as HTMLButtonElement).click();
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyL", bubbles: true, cancelable: true }));
+    (document.querySelector('[aria-label="Remove D from Move right"]') as HTMLButtonElement).click();
+    (document.querySelector('[aria-label="Remove Right from Move right"]') as HTMLButtonElement).click();
+    key("keydown", "KeyD"); tick(1); expect(session.advance.mock.calls.at(-1)[1].x).toBe(0);
+    key("keydown", "KeyL"); tick(2); expect(session.advance.mock.calls.at(-1)[1].x).toBe(1);
+    window.dispatchEvent(new Event("blur")); tick(3);
+    expect(session.pause).toHaveBeenCalled();
+    expect(session.advance.mock.calls.at(-1)[1].x).toBe(0);
+    expect(document.getElementById("input-summary")!.textContent).toContain("Move right: L");
 });
 test("late storage reads cannot restore after Stop, and write failures are visible", async () => {
     dispose();

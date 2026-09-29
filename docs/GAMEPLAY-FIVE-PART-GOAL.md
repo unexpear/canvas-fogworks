@@ -1,8 +1,8 @@
 # Gameplay foundations and 3D level authoring — delivery goal
 
 <!-- describes: src/core/document, src/core/runtime, src/core/actions, src/runtime, src/player, src/player3d, src/app/BehaviorGraphPanel.tsx, scripts/smoke-player.js -->
-<!-- re-read 2026-09-28: runtime tests now also read FoldersDrawer.tsx when pinning shell source.
-     Gameplay actions, player runtime and this delivery goal are unchanged.
+<!-- re-read 2026-09-28: named-input Controls panels rebind the existing player actions and do not
+     complete parts 3–5. Prefab instances, cross-build migration and crash/relaunch acceptance remain open.
      History now records exact serialized retention, including the stack total versus the pinned original. Gameplay command semantics are unchanged. -->
 
 Started 2026-09-19 at the user's explicit request. All five parts are required; partial delivery
