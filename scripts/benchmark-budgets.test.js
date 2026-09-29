@@ -4,7 +4,16 @@
  */
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { calibrateMs, soakRetainedAccounted, soakTailPlateaued, RECORDED_P95_MS, RELEASE_BUDGETS_MS, GPU_IRIS_XE_P95_MS, GPU_HARDWARE_BUDGETS_MS } = require("./benchmark-budgets");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+const {
+    calibrateMs, soakRetainedAccounted, soakTailPlateaued, RECORDED_P95_MS, RELEASE_BUDGETS_MS,
+    GPU_IRIS_XE_P95_MS, GPU_HARDWARE_BUDGETS_MS, FROZEN_CPU_HOSTS, FROZEN_GPU_HOSTS, CI_GATE_ENABLED,
+    normalizeHostSample, compareHostSample, mergeHostSamples, loadHostSampleDirectory,
+    hostSampleFromAuthoringReport, hostSampleFromGpuReport, hostSampleFromBenchmarkReport
+} = require("./benchmark-budgets");
 
 test("frozen release budgets match 1.5× the recorded samples", () => {
     for (const [name, samples] of Object.entries(RECORDED_P95_MS)) {
@@ -23,6 +32,252 @@ test("release budgets are 1.5× the highest sample, rounded up to 0.1 ms", () =>
     assert.equal(calibrateMs([1.12]), 1.7);
     assert.equal(calibrateMs([]), null);
     assert.equal(calibrateMs([Number.NaN, -1]), null);
+});
+
+test("frozen cohort is exactly the budget input", () => {
+    assert.equal(CI_GATE_ENABLED, false);
+    assert.deepEqual(RELEASE_BUDGETS_MS, {
+        "animated-meshes-100": 3.9,
+        "asset-reload": 2.1,
+        "components-500": 6.7,
+        "gameplay-100": 6.7,
+        "pixel-workshop-frame": 1.7,
+        "raster-1024-decode": 5.8,
+        "raster-1024-encode": 10.4,
+        "raster-2048-noisy-decode": 41.6,
+        "raster-2048-noisy-encode": 696.6,
+        "rect-1000-frame": 9.4,
+        "rect-1000-load": 17.8,
+        "rect-250-frame": 5.2,
+        "rect-250-load": 6,
+        "relay-frame": 0.5,
+        "skin-3000": 10.7,
+        "textured-billboards-80": 0.6,
+        "textured-rasters-frame": 774.9
+    });
+    const grouped = {};
+    for (const host of FROZEN_CPU_HOSTS) {
+        for (const [name, value] of Object.entries(host.p95Ms)) {
+            grouped[name] = (grouped[name] ?? []).concat(Array.isArray(value) ? value : [value]);
+        }
+    }
+    assert.deepEqual(Object.keys(grouped).sort(), Object.keys(RECORDED_P95_MS).sort());
+    for (const [name, samples] of Object.entries(RECORDED_P95_MS)) {
+        assert.deepEqual([...grouped[name]].sort((a, b) => a - b), [...samples].sort((a, b) => a - b), name);
+    }
+    assert.equal(FROZEN_GPU_HOSTS.length, 1);
+    for (const [name, samples] of Object.entries(GPU_IRIS_XE_P95_MS)) {
+        assert.deepEqual(samples, [FROZEN_GPU_HOSTS[0].p95Ms[name]], name);
+    }
+    RELEASE_BUDGETS_MS["rect-250-frame"] = 1;
+    GPU_HARDWARE_BUDGETS_MS["pixel-workshop"] = 1;
+    assert.equal(RELEASE_BUDGETS_MS["rect-250-frame"], 5.2);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS["pixel-workshop"], 3.2);
+});
+
+test("an additional sample compares without moving frozen budgets", () => {
+    const cpuBefore = JSON.stringify(RELEASE_BUDGETS_MS);
+    const gpuBefore = JSON.stringify(GPU_HARDWARE_BUDGETS_MS);
+    const sample = normalizeHostSample({
+        id: "example-faster-cpu",
+        recorded: "2026-09-28",
+        kind: "cpu",
+        rendererKind: "cpu",
+        p95Ms: { "rect-250-frame": 10, "rect-1000-frame": 1 }
+    });
+    const comparison = compareHostSample(sample);
+    const slow = comparison.rows.find(row => row.workload === "rect-250-frame");
+    const fast = comparison.rows.find(row => row.workload === "rect-1000-frame");
+    assert.equal(comparison.movesFrozenBudgets, false);
+    assert.equal(comparison.ciGateEnabled, false);
+    assert.equal(comparison.admitted, false);
+    assert.equal(comparison.excludedFromHardwareBudget, true);
+    assert.equal(slow.overFrozenBudget, true);
+    assert.equal(slow.admitted, false);
+    assert.equal(slow.previewBudgetMs, calibrateMs([3.430, 0.977, 10]));
+    assert.equal(fast.overFrozenBudget, false);
+    assert.equal(RELEASE_BUDGETS_MS["rect-250-frame"], 5.2);
+    const merged = mergeHostSamples([], [sample, sample]);
+    assert.equal(merged.samples.length, 1);
+    assert.equal(merged.movesFrozenBudgets, false);
+    assert.throws(() => mergeHostSamples(merged.samples, [{ ...sample, p95Ms: { "rect-250-frame": 11 } }]), /different contents/);
+    assert.throws(() => mergeHostSamples([], [{ ...sample, id: "windows-x64-node-24.15.0-iris-xe-2026-09-07" }]), /frozen cohort/);
+    assert.equal(JSON.stringify(RELEASE_BUDGETS_MS), cpuBefore);
+    assert.equal(JSON.stringify(GPU_HARDWARE_BUDGETS_MS), gpuBefore);
+});
+
+test("software GL is recorded and kept out of the hardware budget", () => {
+    assert.throws(() => normalizeHostSample({
+        id: "mislabeled-llvmpipe",
+        recorded: "2026-09-28",
+        kind: "gpu",
+        rendererKind: "hardware",
+        renderer: "llvmpipe (LLVM 15.0.7, 256 bits)",
+        p95Ms: { "pixel-workshop": 40 }
+    }), /cannot be hardware/);
+    const sample = hostSampleFromGpuReport({
+        available: true,
+        platform: "linux",
+        cpu: "Intel(R) Xeon(R) Processor",
+        results: [
+            { name: "pixel-workshop", renderer: "llvmpipe (LLVM 15.0.7, 256 bits)", cpuSubmissionP95Ms: 9, gpuP95Ms: 20 },
+            { name: "relay-1.vde", renderer: "llvmpipe (LLVM 15.0.7, 256 bits)", cpuSubmissionP95Ms: 2, gpuP95Ms: 8 },
+            { name: "relay-2.vde", renderer: "llvmpipe (LLVM 15.0.7, 256 bits)", cpuSubmissionP95Ms: 3, gpuP95Ms: 4 },
+            { name: "animated-meshes-100", renderer: "llvmpipe (LLVM 15.0.7, 256 bits)", cpuSubmissionP95Ms: 5, gpuP95Ms: null }
+        ]
+    }, { id: "linux-llvmpipe-fixture", recorded: "2026-09-28" });
+    assert.equal(sample.rendererKind, "software");
+    assert.equal(sample.admitsToHardwareBudget, false);
+    assert.equal(sample.p95Ms["pixel-workshop"], 20);
+    assert.equal(sample.p95Ms.relay, 8);
+    assert.equal(sample.p95Ms["animated-meshes-100"], undefined);
+    assert.equal(sample.cpuSubmissionP95Ms["animated-meshes-100"], 5);
+    assert.equal(sample.stageP95Ms["relay-1.vde"], 8);
+    assert.equal(sample.relayAggregation, "max-stage-gpu-p95");
+    const comparison = compareHostSample(sample);
+    assert.equal(comparison.excludedFromHardwareBudget, true);
+    assert.equal(comparison.ciGateEnabled, false);
+    const workshop = comparison.rows.find(row => row.workload === "pixel-workshop");
+    assert.equal(workshop.measuredMs, 20);
+    assert.equal(workshop.frozenBudgetMs, 3.2);
+    assert.equal(workshop.admitted, false);
+    assert.equal(workshop.previewBudgetMs, calibrateMs([2.076, 20]));
+    mergeHostSamples([], [sample]);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS["pixel-workshop"], 3.2);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS.relay, 3.5);
+});
+
+test("hardware timings and missing WebGL do not invent a gate", () => {
+    const hardware = hostSampleFromGpuReport({
+        available: true,
+        results: [{
+            name: "pixel-workshop",
+            renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            cpuSubmissionP95Ms: 50,
+            gpuP95Ms: 9
+        }]
+    }, { id: "second-iris-xe", recorded: "2026-09-28" });
+    assert.equal(hardware.rendererKind, "hardware");
+    const row = compareHostSample(hardware).rows.find(item => item.workload === "pixel-workshop");
+    assert.equal(row.measuredMs, 9);
+    assert.equal(row.admitted, false);
+    assert.equal(compareHostSample(hardware).excludedFromHardwareBudget, false);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS["pixel-workshop"], 3.2);
+    const missing = hostSampleFromGpuReport({
+        available: false,
+        reason: "WebGL1 context unavailable",
+        results: []
+    }, { id: "no-webgl", recorded: "2026-09-28" });
+    assert.equal(missing.rendererKind, "unavailable");
+    assert.deepEqual(missing.p95Ms, {});
+    assert.equal(compareHostSample(missing).rows.length, 0);
+    assert.throws(() => normalizeHostSample({
+        id: "zero-as-missing",
+        recorded: "2026-09-28",
+        kind: "gpu",
+        rendererKind: "unavailable",
+        p95Ms: { "pixel-workshop": 0 }
+    }), /cannot carry timings/);
+    assert.throws(() => hostSampleFromGpuReport({
+        available: true,
+        results: [
+            { name: "pixel-workshop", renderer: "llvmpipe", gpuP95Ms: 1 },
+            { name: "relay", renderer: "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)", gpuP95Ms: 1 }
+        ]
+    }, { id: "mixed", recorded: "2026-09-28" }), /more than one renderer/);
+});
+
+test("authoring and gpu reports normalize into recordable samples", () => {
+    const authoring = hostSampleFromAuthoringReport({
+        platform: "linux",
+        arch: "x64",
+        cpu: "Intel(R) Xeon(R) Processor",
+        cpuCount: 4,
+        totalMemMiB: 16000,
+        node: "v22.14.0",
+        gcControlled: true,
+        releaseComparison: {
+            "rect-250-frame": { measuredMs: 1.25 },
+            "relay-frame": { measuredMs: 0.4 }
+        }
+    }, { id: "linux-xeon-again-cpu", recorded: "2026-09-28" });
+    assert.equal(authoring.kind, "cpu");
+    assert.equal(authoring.rendererKind, "cpu");
+    assert.equal(authoring.admitsToReleaseBudget, false);
+    assert.equal(authoring.p95Ms["rect-250-frame"], 1.25);
+    assert.equal(authoring.host.gcControlled, true);
+    const reread = hostSampleFromBenchmarkReport(authoring, { id: authoring.id, recorded: authoring.recorded });
+    assert.deepEqual(reread, authoring);
+});
+
+test("the 2026-09-28 cloud samples keep cpu, unavailable, and software labels", () => {
+    const samples = loadHostSampleDirectory(path.join(__dirname, "benchmark-host-samples"));
+    const byId = Object.fromEntries(samples.map(sample => [sample.id, sample]));
+    const cpu = byId["linux-x64-xeon-cloud-2026-09-28-cpu"];
+    const missing = byId["linux-x64-xeon-cloud-2026-09-28-gpu-unavailable"];
+    const software = byId["linux-x64-xeon-cloud-2026-09-28-llvmpipe"];
+    assert.equal(cpu.rendererKind, "cpu");
+    assert.equal(cpu.kind, "cpu");
+    assert.equal(cpu.p95Ms["animated-meshes-100"], 17.282);
+    assert.equal(cpu.admitsToReleaseBudget, false);
+    assert.equal(missing.rendererKind, "unavailable");
+    assert.deepEqual(missing.p95Ms, {});
+    assert.equal(missing.reason, "WebGL1 context unavailable");
+    assert.equal(software.rendererKind, "software");
+    assert.match(software.renderer, /llvmpipe/);
+    assert.equal(software.p95Ms["pixel-workshop"], 17.535);
+    assert.equal(software.p95Ms.relay, 5.247);
+    assert.equal(software.cpuSubmissionP95Ms["animated-meshes-100"], 267.1);
+    assert.equal(software.admitsToHardwareBudget, false);
+    const comparison = compareHostSample(software);
+    assert.equal(comparison.excludedFromHardwareBudget, true);
+    assert.equal(comparison.ciGateEnabled, false);
+    assert.equal(comparison.rows.every(row => row.admitted === false), true);
+    assert.equal(RELEASE_BUDGETS_MS["animated-meshes-100"], 3.9);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS["pixel-workshop"], 3.2);
+});
+
+test("recorded sample files stay outside the frozen cohort", () => {
+    const samples = loadHostSampleDirectory(path.join(__dirname, "benchmark-host-samples"));
+    const cpuBefore = JSON.stringify(RELEASE_BUDGETS_MS);
+    const gpuBefore = JSON.stringify(GPU_HARDWARE_BUDGETS_MS);
+    if (samples.length > 0) mergeHostSamples([], samples);
+    assert.equal(JSON.stringify(RELEASE_BUDGETS_MS), cpuBefore);
+    assert.equal(JSON.stringify(GPU_HARDWARE_BUDGETS_MS), gpuBefore);
+    for (const sample of samples) {
+        assert.equal(sample.admitsToReleaseBudget, false);
+        assert.equal(sample.admitsToHardwareBudget, false);
+        const comparison = compareHostSample(sample);
+        assert.equal(comparison.movesFrozenBudgets, false);
+        assert.equal(comparison.ciGateEnabled, false);
+        if (sample.rendererKind !== "hardware") assert.equal(comparison.excludedFromHardwareBudget, true);
+    }
+});
+
+test("the record command writes a software sample without failing the budget", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-budget-sample-"));
+    const report = path.join(directory, "gpu.json");
+    fs.writeFileSync(report, JSON.stringify({
+        available: true,
+        platform: "linux",
+        results: [{ name: "pixel-workshop", renderer: "llvmpipe (LLVM 20.1.2, 256 bits)", gpuP95Ms: 80, cpuSubmissionP95Ms: 4 }]
+    }));
+    const out = path.join(directory, "cloud-llvmpipe-gpu.json");
+    const args = [report, "--id", "cloud-llvmpipe-gpu", "--recorded", "2026-09-28", "--out", out];
+    const first = spawnSync(process.execPath, [path.join(__dirname, "record-benchmark-sample.js"), ...args], { encoding: "utf8" });
+    assert.equal(first.status, 0, first.stderr);
+    const printed = JSON.parse(first.stdout);
+    assert.equal(printed.ciGateEnabled, false);
+    assert.equal(printed.movesFrozenBudgets, false);
+    assert.equal(printed.comparison.excludedFromHardwareBudget, true);
+    assert.equal(printed.comparison.rows[0].overFrozenBudget, true);
+    assert.equal(printed.comparison.rows[0].admitted, false);
+    const second = spawnSync(process.execPath, [path.join(__dirname, "record-benchmark-sample.js"), ...args], { encoding: "utf8" });
+    assert.equal(second.status, 0, second.stderr);
+    const changed = spawnSync(process.execPath, [path.join(__dirname, "record-benchmark-sample.js"), report, "--id", "cloud-llvmpipe-gpu", "--recorded", "2026-09-29", "--out", out], { encoding: "utf8" });
+    assert.equal(changed.status, 1);
+    assert.match(changed.stderr, /different sample/);
+    fs.rmSync(directory, { recursive: true, force: true });
 });
 
 test("accounted soak growth follows new snapshots and allows a trim drop", () => {

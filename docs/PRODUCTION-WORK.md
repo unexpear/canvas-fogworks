@@ -27,7 +27,7 @@ All five tracks have implementation; this is a bounded production baseline, not 
 
 - `npm run ci`: typecheck, module headers, doc drift, header-claim inventory, mutation-target preflight, complete Jest suite, real writer-process crash tests, build, startup/file/lighting/3D/level-transition/authoring Electron smokes.
 - `npm run smoke:package`: build the Windows NSIS package and launch the unpacked executable for startup and Open/Edit/Save tests. It does not silently install the application on the user's machine.
-- `npm run benchmark:authoring`: informational local measurements, including the mixed soak, noisy 2048 raster and textured scenes; intentionally no hardware-dependent CI failure threshold. `npm run test:benchmark-budgets` locks the budget formula only.
+- `npm run benchmark:authoring`: informational local measurements, including the mixed soak, noisy 2048 raster and textured scenes; intentionally no hardware-dependent CI failure threshold. `npm run test:benchmark-budgets` locks the budget formula and the rule that extra host samples do not move it. `node scripts/record-benchmark-sample.js` stores a later host beside the frozen budgets.
 - Focused regression suites: `ProjectSession`, `ProjectFileWorkflow`, `projectDependencies`, `asepriteImport`, `CanvasExport`, `GameplayPanel`, `GameplaySession`, `GameExport`, `LevelTransitionWorkflow`, `GltfMotion`, `Collision3D` and `ThreeDInspector`.
 - `smoke:authoring` uses actual Chromium PNG decoding/pixel inspection, silent generated WAV decode/play/stop, and an offline game reaching victory. This is not an audible listening test.
 - Mutation preflight checks all 402 targets still match; it is not equivalent to executing and killing all mutants.
@@ -104,7 +104,7 @@ The September Windows heap deltas (4.32 MiB and 12.13 MiB) are process measureme
 
 **Soak.** 373 edits in 3.547 s. Growth stayed proportional to new snapshots (`accountedGrowth`). Trim began at the ceiling and the tail held 344 revisions (`tailPlateaued`). Stack estimate at the end: 127.643 MiB, inside 128 MiB. With the detached original: 128.015 MiB. Exact JSON retention at that plateau: 64.042 MiB. Process heap: 134.84 MiB. Retention is bounded by the existing trim rule. That is not a leak and not a reason to replace snapshot history.
 
-**Budget rule.** Interactive frame work still aims at 16.67 ms. Deserialize still aims at 100 ms. A frozen release budget is 1.5× the highest recorded p95, rounded up to 0.1 ms (`scripts/benchmark-budgets.js`). `benchmark:authoring` reports whether a later run exceeded that budget. It does not move the budget, and it does not fail CI. Single-host rows were not measured on Windows. Gameplay includes the small reference scene and the slowest Linux relay stage.
+**Budget rule.** Interactive frame work still aims at 16.67 ms. Deserialize still aims at 100 ms. A frozen release budget is 1.5× the highest p95 in the frozen cohort, rounded up to 0.1 ms (`scripts/benchmark-budgets.js`). That cohort is the September 7 Windows sample and the 2026-09-28 Linux Xeon sample named in `FROZEN_CPU_HOSTS`. `benchmark:authoring` reports whether a later run exceeded that budget. It does not move the budget, and it does not fail CI. Single-host rows were not measured on Windows. Gameplay includes the small reference scene and the slowest Linux relay stage.
 
 | Workload | Windows p95 | Linux p95 | Release budget | Over 16.67 ms on Linux |
 | --- | ---: | ---: | ---: | --- |
@@ -138,7 +138,30 @@ GPU submission is not part of the CPU budgets above. Plain `npm run benchmark:gp
 | Textured rasters |  | 1.4 | 10.93 | 8 |
 | 80 textured billboards |  | 24.9 | 33.707 | 10 |
 
-Cached raster draws are cheaper on this software GL than building the 40 MiB frame (516.552 ms CPU). The 80 billboards, which upload and sample real textures, are the slow software-GL case. Neither result is a hardware certification, and neither selects a new backend.
+Cached raster draws are cheaper on this software GL than building the 40 MiB frame (516.552 ms CPU). The 80 billboards, which upload and sample real textures, are the slow software-GL case. Neither result is a hardware certification, and neither selects a new backend. That llvmpipe table stays prose. Relay was published as a range, so the run was not copied into a host-sample file and was not given a single invented relay p95.
+
+**Adding a host sample.** Frozen CPU budgets stay the two hosts above. Frozen GPU budgets stay the Iris Xe p95 only: Signal Garden 3.2 ms, relay 3.5 ms, 100 meshes 2.8 ms. A file in `scripts/benchmark-host-samples/` is a later observation. It does not change those numbers, and `CI_GATE_ENABLED` stays false. `npm run ci` does not run these benchmarks.
+
+On the machine to record:
+
+1. Run `npm run benchmark:authoring` and save the JSON. That is a CPU sample (`rendererKind: "cpu"`), not a GPU certification.
+2. Run `npm run benchmark:gpu` and save the JSON. Leave SwiftShader, llvmpipe, and `--enable-unsafe-swiftshader` off when the sample is meant to be hardware. A missing WebGL context is reported as unavailable and has no timings.
+3. Store each report under a new id of lowercase letters, digits, dots, and hyphens. Reusing an id with the same body is a no-op. A different body is refused. Do not reuse a frozen cohort id.
+
+```
+node scripts/record-benchmark-sample.js authoring.json --id <host>-cpu --recorded YYYY-MM-DD --out scripts/benchmark-host-samples/<host>-cpu.json
+node scripts/record-benchmark-sample.js gpu.json --id <host>-gpu --recorded YYYY-MM-DD --out scripts/benchmark-host-samples/<host>-gpu.json
+```
+
+The command uses the same software-renderer list as `validate:hardware-gpu`. llvmpipe, SwiftShader, softpipe, lavapipe, virgl, and the Microsoft Basic Render Driver are `software`. An empty or unrecognized renderer is `unknown` or `unavailable`. Those samples are stored with `excludedFromHardwareBudget: true`. `rendererKind: "hardware"` is accepted only when the renderer string itself classifies as hardware. The printed `previewBudgetMs` is the 1.5× figure that would result if a later edit admitted the sample. The command does not write that figure into `RELEASE_BUDGETS_MS` or `GPU_HARDWARE_BUDGETS_MS`. Exit status is 0 when the sample is over budget or software GL. Exit status is 1 when the JSON is invalid, the id is a frozen cohort id, or that id is already stored with different numbers.
+
+Per-stage GPU names such as `relay-1.vde` are kept on `stageP95Ms`. The sample's `relay` value is the maximum of those stage GPU p95s, the same ceiling rule as the Iris Xe relay budget. CPU submission stays on `cpuSubmissionP95Ms` and is not compared with the GPU budgets.
+
+Admitting a sample means editing `FROZEN_CPU_HOSTS` or `FROZEN_GPU_HOSTS` and the tables in this section. One added hardware GPU host still does not justify a CI gate or a renderer rewrite.
+
+**Cloud VM, 2026-09-28.** This environment is Linux x64, 4 vCPU Intel Xeon, 16014 MiB. It is not a physical GPU host. `benchmark:authoring` under Node 22.14.0 with `--expose-gc` is stored as `linux-x64-xeon-cloud-2026-09-28-cpu`. That file is a later measurement, not a second copy of the frozen Xeon cohort, and the frozen CPU table above was not edited. Rows over the frozen CPU budget were 100 animated meshes 17.282 ms (budget 3.9), 100 gameplay steps 7.427 ms (6.7), Signal Garden frame 1.739 ms (1.7), 1024 raster decode 7.897 ms (5.8), and 80 textured billboards 1.133 ms (0.6). The other CPU rows were inside the frozen budget.
+
+Plain `benchmark:gpu` on Electron 43.2.0 / Chromium 150 (that process reports Node 24.18.0) found WebGL1 blocklisted. `linux-x64-xeon-cloud-2026-09-28-gpu-unavailable` has an empty timing map. Rerunning with `--ignore-gpu-blocklist --enable-unsafe-swiftshader` produced `ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL 4.5)`, stored as `linux-x64-xeon-cloud-2026-09-28-llvmpipe` with `rendererKind: "software"`. GPU p95 was Signal Garden 17.535 ms, relay ceiling 5.247 ms (stages 3.459 / 2.226 / 5.247), 100 meshes 11.341 ms, textured rasters 10.462 ms, and 80 billboards 30.429 ms. CPU submission for the 100 meshes was 267.1 ms. The mesh and billboard GPU p95s each omit one invalid timer sample. None of these figures were admitted. Hardware GPU budgets remain Signal Garden 3.2 ms, relay 3.5 ms, and 100 meshes 2.8 ms. This run does not add a physical GPU host, a CI gate, or a reason to rewrite the renderer.
 
 ## Initial local budgets
 

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "linux-x64-xeon-cloud-2026-09-28-gpu-unavailable",
+  "recorded": "2026-09-28",
+  "kind": "gpu",
+  "rendererKind": "unavailable",
+  "renderer": null,
+  "admitsToReleaseBudget": false,
+  "admitsToHardwareBudget": false,
+  "host": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "node": "v24.18.0",
+    "electron": "43.2.0",
+    "chromium": "150.0.7871.129",
+    "cpuCount": 4,
+    "totalMemMiB": 16014
+  },
+  "p95Ms": {},
+  "cpuSubmissionP95Ms": {},
+  "reason": "WebGL1 context unavailable",
+  "note": "Plain Electron 43.2.0 / Chromium 150 on the same cloud VM. Chromium reported WebGL1 blocklisted, and the harness recorded the context as unavailable. No timings were invented."
+}

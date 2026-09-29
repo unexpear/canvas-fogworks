@@ -1,11 +1,14 @@
 /**
  * @module benchmark-budgets
- * @description Informational SCALE-001 release budgets. Comparisons never fail CI.
+ * @description Informational SCALE-001 release budgets. Additional host samples compare
+ * against the frozen cohort and do not change it. Comparisons do not fail CI.
  *
  * Interactive frame work still aims at 16.67 ms. A release budget is 1.5× the highest
- * recorded p95 for that workload, rounded up to 0.1 ms. One host does not make a
- * hardware-independent gate. History trimming stays at its 128 MiB estimate ceiling.
+ * p95 in the frozen cohort for that workload, rounded up to 0.1 ms. One hardware GPU
+ * host does not make a hardware-independent gate. History trimming stays at its 128 MiB
+ * estimate ceiling.
  */
+const { classifyGpuRenderer } = require("./validate-hardware-gpu");
 const INTERACTIVE_FRAME_MS = 16.67;
 const DESERIALIZE_GOAL_MS = 100;
 const HISTORY_TRIM_BYTES = 128 * 1024 * 1024;
@@ -121,6 +124,449 @@ const GPU_HARDWARE_BUDGETS_MS = Object.fromEntries(
     Object.entries(GPU_IRIS_XE_P95_MS).map(([name, samples]) => [name, calibrateMs(samples)])
 );
 
+/**
+ * Named attribution for RECORDED_P95_MS. The arrays above stay the budget input.
+ * A test checks that these hosts are the same multiset, so editing one without the
+ * other cannot quietly change a frozen budget.
+ */
+const FROZEN_CPU_HOSTS = [
+    {
+        id: "windows-x64-node-24.15.0-iris-xe-2026-09-07",
+        recorded: "2026-09-07",
+        kind: "cpu",
+        rendererKind: "cpu",
+        note: "September 7, 2026 Windows x64 / Node 24.15.0 / Intel Iris Xe CPU ceilings.",
+        p95Ms: {
+            "rect-250-frame": 3.430,
+            "rect-1000-frame": 6.247,
+            "rect-250-load": 3.934,
+            "rect-1000-load": 11.818,
+            "pixel-workshop-frame": 1.120,
+            "relay-frame": 0.218,
+            "components-500": 3.559,
+            "animated-meshes-100": 1.239,
+            "gameplay-100": 3.651,
+            "skin-3000": 7.074,
+            "raster-1024-encode": 6.889,
+            "raster-1024-decode": 3.267,
+            "asset-reload": 1.399
+        }
+    },
+    {
+        id: "linux-x64-node-22.14.0-xeon-2026-09-28",
+        recorded: "2026-09-28",
+        kind: "cpu",
+        rendererKind: "cpu",
+        note: "2026-09-28 Linux x64, Node 22.14.0, 4 vCPU Intel Xeon, 16 GiB. No hardware WebGL. relay-frame lists the three stage p95s; gameplay-100 lists the reference scene and the slowest relay stage.",
+        p95Ms: {
+            "rect-250-frame": 0.977,
+            "rect-1000-frame": 2.087,
+            "rect-250-load": 1.487,
+            "rect-1000-load": 3.481,
+            "pixel-workshop-frame": 0.979,
+            "relay-frame": [0.166, 0.273, 0.171],
+            "components-500": 4.441,
+            "animated-meshes-100": 2.581,
+            "gameplay-100": [0.901, 4.401],
+            "skin-3000": 4.919,
+            "raster-1024-encode": 4.766,
+            "raster-1024-decode": 3.811,
+            "asset-reload": 1.034,
+            "raster-2048-noisy-encode": 464.389,
+            "raster-2048-noisy-decode": 27.667,
+            "textured-rasters-frame": 516.552,
+            "textured-billboards-80": 0.358
+        }
+    }
+];
+
+/** Iris Xe GPU p95 only. The unmasked renderer string was not retained with this sample. */
+const FROZEN_GPU_HOSTS = [
+    {
+        id: "windows-x64-iris-xe-gpu-2026-09-07",
+        recorded: "2026-09-07",
+        kind: "gpu",
+        rendererKind: "hardware",
+        note: "September Iris Xe GPU p95. Software GL is not part of this cohort.",
+        p95Ms: {
+            "pixel-workshop": 2.076,
+            relay: 2.312,
+            "animated-meshes-100": 1.851
+        }
+    }
+];
+
+const FROZEN_SAMPLE_IDS = new Set([
+    ...FROZEN_CPU_HOSTS.map(host => host.id),
+    ...FROZEN_GPU_HOSTS.map(host => host.id)
+]);
+
+/** SCALE-001 has no hardware-independent CI gate. Recording a sample does not enable one. */
+const CI_GATE_ENABLED = false;
+const HOST_SAMPLE_SCHEMA = 1;
+const RELAY_AGGREGATION = "max-stage-gpu-p95";
+const SAMPLE_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
+const WORKLOAD_NAME = SAMPLE_ID;
+
+function freezeSampleTable(table) {
+    for (const value of Object.values(table)) {
+        if (Array.isArray(value)) Object.freeze(value);
+    }
+    return Object.freeze(table);
+}
+freezeSampleTable(RECORDED_P95_MS);
+freezeSampleTable(GPU_IRIS_XE_P95_MS);
+Object.freeze(RELEASE_BUDGETS_MS);
+Object.freeze(GPU_HARDWARE_BUDGETS_MS);
+
+function sortedObject(source) {
+    return Object.fromEntries(Object.entries(source).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0));
+}
+
+function finiteMilliseconds(value, label) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw new Error(`${label} must be a finite non-negative number of milliseconds`);
+    }
+    return value;
+}
+
+function normalizeP95Map(map, label) {
+    if (map == null) return {};
+    if (typeof map !== "object" || Array.isArray(map)) throw new Error(`${label} must be an object`);
+    const out = {};
+    for (const [name, value] of Object.entries(map)) {
+        if (!WORKLOAD_NAME.test(name)) throw new Error(`${label} workload name is invalid: ${name}`);
+        if (value == null) continue;
+        if (Array.isArray(value)) {
+            if (value.length === 0) continue;
+            if (value.some(item => item == null)) throw new Error(`${label}.${name} cannot contain null`);
+            out[name] = value.map((item, index) => finiteMilliseconds(item, `${label}.${name}[${index}]`));
+        } else {
+            out[name] = finiteMilliseconds(value, `${label}.${name}`);
+        }
+    }
+    return sortedObject(out);
+}
+
+function normalizeHost(host) {
+    const source = host && typeof host === "object" && !Array.isArray(host) ? host : {};
+    const out = {};
+    for (const key of ["platform", "arch", "cpu", "node", "electron", "chromium"]) {
+        if (source[key] != null && source[key] !== "") out[key] = String(source[key]);
+    }
+    for (const key of ["cpuCount", "totalMemMiB"]) {
+        if (source[key] == null || source[key] === "") continue;
+        if (typeof source[key] !== "number" || !Number.isInteger(source[key]) || source[key] < 0) {
+            throw new Error(`host.${key} must be a non-negative integer`);
+        }
+        out[key] = source[key];
+    }
+    if (source.gcControlled != null) {
+        if (typeof source.gcControlled !== "boolean") throw new Error("host.gcControlled must be a boolean");
+        out.gcControlled = source.gcControlled;
+    }
+    return out;
+}
+
+/**
+ * Canonical host sample. Admission flags are forced off: a file cannot opt itself
+ * into the frozen cohort. Null timings are omitted rather than stored as zero.
+ */
+function normalizeHostSample(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("host sample must be an object");
+    if (input.schemaVersion != null && input.schemaVersion !== HOST_SAMPLE_SCHEMA) {
+        throw new Error(`host sample schemaVersion must be ${HOST_SAMPLE_SCHEMA}`);
+    }
+    const id = input.id == null || input.id === "" ? null : String(input.id);
+    if (id != null && !SAMPLE_ID.test(id)) throw new Error(`host sample id must be lowercase letters, digits, dots, and hyphens: ${id}`);
+    const recorded = input.recorded == null || input.recorded === "" ? null : String(input.recorded);
+    if (recorded != null && !/^\d{4}-\d{2}-\d{2}$/.test(recorded)) {
+        throw new Error(`host sample recorded must be YYYY-MM-DD: ${recorded}`);
+    }
+    if (input.kind !== "cpu" && input.kind !== "gpu") throw new Error("host sample kind must be cpu or gpu");
+    if (input.admitsToReleaseBudget === true || input.admitsToHardwareBudget === true || input.frozen === true) {
+        throw new Error("a recorded host sample cannot admit itself into a frozen budget");
+    }
+    const renderer = input.renderer == null || String(input.renderer).trim() === "" ? null : String(input.renderer).trim();
+    let rendererKind = input.rendererKind == null ? null : String(input.rendererKind);
+    if (renderer) {
+        const classified = classifyGpuRenderer(renderer).kind;
+        if (rendererKind == null) rendererKind = classified;
+        if ((classified === "hardware" || classified === "software") && rendererKind !== classified) {
+            throw new Error(`renderer is ${classified}, so rendererKind cannot be ${rendererKind}`);
+        }
+        if ((rendererKind === "cpu" || rendererKind === "unavailable") && classified !== "unknown") {
+            throw new Error(`rendererKind ${rendererKind} disagrees with renderer ${renderer}`);
+        }
+    }
+    const allowed = input.kind === "cpu"
+        ? new Set(["cpu"])
+        : new Set(["hardware", "software", "unavailable", "unknown"]);
+    if (!allowed.has(rendererKind)) throw new Error(`rendererKind ${rendererKind} is not valid for a ${input.kind} sample`);
+    if ((rendererKind === "hardware" || rendererKind === "software") && !renderer) {
+        throw new Error(`${rendererKind} samples require a renderer string`);
+    }
+    if (input.kind === "cpu" && renderer) throw new Error("a cpu sample cannot carry a GL renderer");
+    const p95Ms = normalizeP95Map(input.p95Ms, "p95Ms");
+    const cpuSubmissionP95Ms = normalizeP95Map(input.cpuSubmissionP95Ms, "cpuSubmissionP95Ms");
+    const stageP95Ms = normalizeP95Map(input.stageP95Ms, "stageP95Ms");
+    if (input.kind === "cpu" && (Object.keys(cpuSubmissionP95Ms).length > 0 || Object.keys(stageP95Ms).length > 0)) {
+        throw new Error("cpu samples record p95Ms only");
+    }
+    if (rendererKind === "unavailable" && (Object.keys(p95Ms).length > 0 || Object.keys(cpuSubmissionP95Ms).length > 0 || Object.keys(stageP95Ms).length > 0)) {
+        throw new Error("unavailable WebGL cannot carry timings");
+    }
+    if (input.relayAggregation != null && input.relayAggregation !== RELAY_AGGREGATION) {
+        throw new Error(`relayAggregation must be ${RELAY_AGGREGATION}`);
+    }
+    const sample = {
+        schemaVersion: HOST_SAMPLE_SCHEMA,
+        id,
+        recorded,
+        kind: input.kind,
+        rendererKind,
+        renderer,
+        admitsToReleaseBudget: false,
+        admitsToHardwareBudget: false,
+        host: normalizeHost(input.host),
+        p95Ms
+    };
+    if (input.kind === "gpu") sample.cpuSubmissionP95Ms = cpuSubmissionP95Ms;
+    if (Object.keys(stageP95Ms).length > 0) sample.stageP95Ms = stageP95Ms;
+    if (input.relayAggregation) sample.relayAggregation = RELAY_AGGREGATION;
+    if (input.reason != null && input.reason !== "") sample.reason = String(input.reason);
+    if (input.note != null && input.note !== "") sample.note = String(input.note);
+    return sample;
+}
+
+function assertRecordable(sample) {
+    const normalized = normalizeHostSample(sample);
+    if (!normalized.id) throw new Error("recorded host sample requires an id");
+    if (!normalized.recorded) throw new Error("recorded host sample requires a recorded date");
+    if (FROZEN_SAMPLE_IDS.has(normalized.id)) {
+        throw new Error(`${normalized.id} is a frozen cohort id and cannot be stored as an additional sample`);
+    }
+    return normalized;
+}
+
+function measuredValues(value) {
+    return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * Compare one sample to the frozen budgets. previewBudgetMs is the 1.5× figure that
+ * would result if a later edit admitted the sample. This function does not admit it.
+ */
+function compareHostSample(sample) {
+    const normalized = normalizeHostSample(sample);
+    const gpu = normalized.kind === "gpu";
+    const budgetTable = gpu ? GPU_HARDWARE_BUDGETS_MS : RELEASE_BUDGETS_MS;
+    const frozenSamples = gpu ? GPU_IRIS_XE_P95_MS : RECORDED_P95_MS;
+    const rows = Object.entries(normalized.p95Ms).map(([workload, value]) => {
+        const measured = measuredValues(value);
+        const worstMs = Math.max(...measured);
+        const frozenList = frozenSamples[workload] ?? [];
+        const hasFrozenBudget = Object.prototype.hasOwnProperty.call(budgetTable, workload);
+        const frozenBudgetMs = hasFrozenBudget ? budgetTable[workload] : null;
+        return {
+            workload,
+            measuredMs: measured.length === 1 ? measured[0] : measured.slice(),
+            worstMs,
+            frozenBudgetMs,
+            overFrozenBudget: frozenBudgetMs == null ? null : worstMs > frozenBudgetMs,
+            previewBudgetMs: calibrateMs(frozenList.concat(measured)),
+            admitted: false
+        };
+    });
+    return {
+        id: normalized.id,
+        kind: normalized.kind,
+        rendererKind: normalized.rendererKind,
+        movesFrozenBudgets: false,
+        ciGateEnabled: CI_GATE_ENABLED,
+        excludedFromHardwareBudget: !(gpu && normalized.rendererKind === "hardware"),
+        admitted: false,
+        rows
+    };
+}
+
+/** Append samples without editing frozen budgets. The same id and body is idempotent. */
+function mergeHostSamples(registry, incoming) {
+    if (!Array.isArray(registry)) throw new Error("sample registry must be an array");
+    const frozenBefore = JSON.stringify({ cpu: RELEASE_BUDGETS_MS, gpu: GPU_HARDWARE_BUDGETS_MS });
+    const samples = [];
+    const byId = new Map();
+    const take = item => {
+        const sample = assertRecordable(item);
+        const body = JSON.stringify(sample);
+        const existing = byId.get(sample.id);
+        if (existing != null) {
+            if (existing !== body) throw new Error(`host sample ${sample.id} already exists with different contents`);
+            return;
+        }
+        byId.set(sample.id, body);
+        samples.push(sample);
+    };
+    for (const item of registry) take(item);
+    const additions = Array.isArray(incoming) ? incoming : [incoming];
+    const comparisonSource = [];
+    for (const item of additions) {
+        const sample = assertRecordable(item);
+        comparisonSource.push(sample);
+        take(sample);
+    }
+    const frozenAfter = JSON.stringify({ cpu: RELEASE_BUDGETS_MS, gpu: GPU_HARDWARE_BUDGETS_MS });
+    if (frozenBefore !== frozenAfter) throw new Error("merge changed a frozen budget");
+    return {
+        samples,
+        movesFrozenBudgets: false,
+        ciGateEnabled: CI_GATE_ENABLED,
+        comparisons: comparisonSource.map(compareHostSample)
+    };
+}
+
+function loadHostSampleDirectory(directory) {
+    const fs = require("fs");
+    const path = require("path");
+    if (!fs.existsSync(directory)) return [];
+    const names = fs.readdirSync(directory).filter(name => name.endsWith(".json")).sort();
+    const loaded = names.map(name => {
+        let parsed;
+        try {
+            parsed = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
+        } catch (error) {
+            throw new Error(`${name} is not valid JSON: ${error.message}`);
+        }
+        const sample = assertRecordable(parsed);
+        if (`${sample.id}.json` !== name) throw new Error(`${name} must be named ${sample.id}.json`);
+        return sample;
+    });
+    return mergeHostSamples([], loaded).samples;
+}
+
+function hostMeta(report, meta) {
+    return {
+        id: meta.id ?? null,
+        recorded: meta.recorded ?? null,
+        note: meta.note,
+        host: {
+            platform: report.platform,
+            arch: report.arch,
+            cpu: report.cpu,
+            cpuCount: report.cpuCount,
+            totalMemMiB: report.totalMemMiB,
+            node: report.node,
+            electron: report.electron,
+            chromium: report.chromium,
+            gcControlled: report.gcControlled
+        }
+    };
+}
+
+function hostSampleFromAuthoringReport(report, meta = {}) {
+    if (!report || typeof report !== "object" || Array.isArray(report)) throw new Error("authoring report must be an object");
+    if (!report.releaseComparison || typeof report.releaseComparison !== "object") {
+        throw new Error("authoring report has no releaseComparison");
+    }
+    const p95Ms = {};
+    for (const [name, row] of Object.entries(report.releaseComparison)) {
+        if (!row || row.measuredMs == null) continue;
+        p95Ms[name] = row.measuredMs;
+    }
+    const stamped = hostMeta(report, meta);
+    return normalizeHostSample({
+        schemaVersion: HOST_SAMPLE_SCHEMA,
+        id: stamped.id,
+        recorded: stamped.recorded,
+        kind: "cpu",
+        rendererKind: "cpu",
+        host: stamped.host,
+        p95Ms,
+        note: meta.note ?? "CPU sample recorded beside the frozen release budgets. It does not move them."
+    });
+}
+
+function hostSampleFromGpuReport(report, meta = {}) {
+    if (!report || typeof report !== "object" || Array.isArray(report)) throw new Error("gpu report must be an object");
+    const stamped = hostMeta(report, meta);
+    if (report.available === false) {
+        if (Array.isArray(report.results) && report.results.length > 0) {
+            throw new Error("an unavailable GPU report cannot include timings");
+        }
+        return normalizeHostSample({
+            schemaVersion: HOST_SAMPLE_SCHEMA,
+            id: stamped.id,
+            recorded: stamped.recorded,
+            kind: "gpu",
+            rendererKind: "unavailable",
+            host: stamped.host,
+            p95Ms: {},
+            reason: report.reason || "WebGL unavailable",
+            note: meta.note ?? "No WebGL timings. A missing context is unavailable, not zero."
+        });
+    }
+    if (!Array.isArray(report.results) || report.results.length === 0) throw new Error("gpu report has no results");
+    const renderers = report.results.map(result => result && result.renderer != null ? String(result.renderer).trim() : "");
+    if (new Set(renderers).size !== 1) throw new Error("gpu report contains more than one renderer");
+    const renderer = renderers[0] || null;
+    const rendererKind = classifyGpuRenderer(renderer).kind;
+    const p95Ms = {};
+    const cpuSubmissionP95Ms = {};
+    const stageP95Ms = {};
+    let explicitRelay = null;
+    for (const result of report.results) {
+        if (!result || typeof result.name !== "string" || !WORKLOAD_NAME.test(result.name)) {
+            throw new Error("gpu result name is missing or invalid");
+        }
+        if (result.cpuSubmissionP95Ms != null) cpuSubmissionP95Ms[result.name] = result.cpuSubmissionP95Ms;
+        if (result.gpuP95Ms == null) continue;
+        if (result.name.startsWith("relay-")) stageP95Ms[result.name] = result.gpuP95Ms;
+        else if (result.name === "relay") explicitRelay = result.gpuP95Ms;
+        else p95Ms[result.name] = result.gpuP95Ms;
+    }
+    let relayAggregation = null;
+    const stageValues = Object.values(stageP95Ms);
+    if (stageValues.length > 0) {
+        if (explicitRelay != null) throw new Error("gpu report contains both relay and per-stage relay timings");
+        p95Ms.relay = Math.max(...stageValues);
+        relayAggregation = RELAY_AGGREGATION;
+    } else if (explicitRelay != null) {
+        p95Ms.relay = explicitRelay;
+    }
+    const software = rendererKind === "software";
+    const hardware = rendererKind === "hardware";
+    return normalizeHostSample({
+        schemaVersion: HOST_SAMPLE_SCHEMA,
+        id: stamped.id,
+        recorded: stamped.recorded,
+        kind: "gpu",
+        rendererKind,
+        renderer,
+        host: stamped.host,
+        p95Ms,
+        cpuSubmissionP95Ms,
+        stageP95Ms,
+        relayAggregation,
+        note: meta.note ?? (software
+            ? "Software GL. Excluded from hardware GPU budgets."
+            : hardware
+                ? "Hardware GPU sample. Recorded only; frozen hardware budgets stay the Iris Xe cohort."
+                : "Renderer is not classified as hardware. Excluded from hardware GPU budgets.")
+    });
+}
+
+function hostSampleFromBenchmarkReport(report, meta = {}) {
+    if (!report || typeof report !== "object" || Array.isArray(report)) throw new Error("benchmark report must be an object");
+    if (report.available === false || Array.isArray(report.results)) return hostSampleFromGpuReport(report, meta);
+    if (report.releaseComparison) return hostSampleFromAuthoringReport(report, meta);
+    return normalizeHostSample({
+        ...report,
+        ...(meta.id != null ? { id: meta.id } : {}),
+        ...(meta.recorded != null ? { recorded: meta.recorded } : {}),
+        ...(meta.note != null ? { note: meta.note } : {})
+    });
+}
+
 module.exports = {
     INTERACTIVE_FRAME_MS,
     DESERIALIZE_GOAL_MS,
@@ -134,5 +580,18 @@ module.exports = {
     RECORDED_P95_MS,
     RELEASE_BUDGETS_MS,
     GPU_IRIS_XE_P95_MS,
-    GPU_HARDWARE_BUDGETS_MS
+    GPU_HARDWARE_BUDGETS_MS,
+    FROZEN_CPU_HOSTS,
+    FROZEN_GPU_HOSTS,
+    FROZEN_SAMPLE_IDS,
+    CI_GATE_ENABLED,
+    HOST_SAMPLE_SCHEMA,
+    RELAY_AGGREGATION,
+    normalizeHostSample,
+    compareHostSample,
+    mergeHostSamples,
+    loadHostSampleDirectory,
+    hostSampleFromAuthoringReport,
+    hostSampleFromGpuReport,
+    hostSampleFromBenchmarkReport
 };

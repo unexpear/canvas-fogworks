@@ -181,16 +181,27 @@ for (const [name, releaseBudgetMs] of Object.entries(budgets.RELEASE_BUDGETS_MS)
         overReleaseBudget:measured>releaseBudgetMs,
         ...(frameKeys.has(name)?{ overInteractiveGoal:measured>budgets.INTERACTIVE_FRAME_MS }: {}) };
 }
+const hostSample=budgets.normalizeHostSample({
+    schemaVersion:budgets.HOST_SAMPLE_SCHEMA, id:null, recorded:new Date().toISOString().slice(0,10),
+    kind:"cpu", rendererKind:"cpu",
+    host:{ platform:process.platform, arch:process.arch, cpu:os.cpus()[0]?.model??"unknown",
+        cpuCount:os.cpus().length, totalMemMiB:Math.round(os.totalmem()/1048576),
+        node:process.version, gcControlled:typeof global.gc==="function" },
+    p95Ms:measuredMs,
+    note:"CPU sample. record-benchmark-sample.js stores it beside the frozen budgets and does not change them."
+});
+const budgetComparison=budgets.compareHostSample(hostSample);
 console.log(JSON.stringify({ node:process.version, platform:process.platform, arch:process.arch,
     cpu:os.cpus()[0]?.model??"unknown", cpuCount:os.cpus().length, totalMemMiB:Math.round(os.totalmem()/1048576),
     gcControlled:typeof global.gc==="function", cases, gameplay100StepsP95Ms, skin3000VerticesP95Ms,
     authoringProjects, raster1024, raster2048Noisy, components500, animatedMeshes100FrameCpuP95Ms,
-    texturedRasters, texturedBillboards80, assetReloadP95Ms, soak, releaseComparison,
+    texturedRasters, texturedBillboards80, assetReloadP95Ms, soak, releaseComparison, hostSample, budgetComparison,
     policy:{ headroom:budgets.HEADROOM, interactiveFrameMs:budgets.INTERACTIVE_FRAME_MS, deserializeGoalMs:budgets.DESERIALIZE_GOAL_MS,
-        historyTrimBytes:budgets.HISTORY_TRIM_BYTES, priorHost:prior.id },
+        historyTrimBytes:budgets.HISTORY_TRIM_BYTES, priorHost:prior.id, ciGateEnabled:budgets.CI_GATE_ENABLED },
     notes:["Frame measurements cover geometry/display-list CPU work, not GPU presentation.",
         "History serializedUtf8Bytes plus payloadUtf8Bytes is the exact canonical JSON retention. processHeapDeltaMiB is a separate process measurement.",
-        "Frozen release budgets live in scripts/benchmark-budgets.js: 1.5× the highest recorded p95. This run reports whether it exceeded them and does not move them.",
+        "Frozen release budgets live in scripts/benchmark-budgets.js: 1.5× the highest frozen-cohort p95. This run reports whether it exceeded them and does not move them.",
+        "hostSample is a CPU record. Pass this JSON to scripts/record-benchmark-sample.js to store it. That command does not admit the sample.",
         "The soak mixes edits, frame builds, relay steps and a 1024 raster decode, then keeps editing through the trim ceiling."]},null,2));
 }
 report().catch(error=>{console.error(error);process.exitCode=1;});

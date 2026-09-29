@@ -38,8 +38,9 @@ editing/save checkpoints and restores with the production session in a fresh pro
 now completes the original three-level relay and exports the editable pixel/component workshop.
 These checks are in `ci`. `benchmark:authoring` and optional `benchmark:gpu` remain informational;
 they now also record a mixed soak, noisy 2048 / multi-raster scenes, textured billboards and exact
-history JSON retention. `npm run test:benchmark-budgets` locks the budget formula. Workloads, limits
-and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
+history JSON retention. `npm run test:benchmark-budgets` locks the budget formula and checks that
+samples under `scripts/benchmark-host-samples/` do not move it. Software GL stays labeled and is
+not a hardware budget. Workloads, limits and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
 <!-- re-read 2026-09-28: player HTML and the 3D host expose named-input Controls. World3D, the 3D
@@ -54,7 +55,7 @@ and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 > 🔒 Frozen contract · schema v89 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
 
-`npm run smoke:authoring` checks exported PNG pixels and offline-game victory in real Electron Chromium. `npm run benchmark:authoring` reports owned 250/1000-node CPU/load measurements, exact history retention, a longer mixed soak, noisy 2048 raster work and larger textured scenes. `benchmark:gpu` adds those textured scenes when a display is available. These are informational, not hardware-dependent CI thresholds. See [Production workflows](PRODUCTION-WORK.md).
+`npm run smoke:authoring` checks exported PNG pixels and offline-game victory in real Electron Chromium. `npm run benchmark:authoring` reports owned 250/1000-node CPU/load measurements, exact history retention, a longer mixed soak, noisy 2048 raster work and larger textured scenes. `benchmark:gpu` adds those textured scenes when a display is available and labels the renderer hardware, software, unavailable, or unknown. `node scripts/record-benchmark-sample.js` stores that JSON beside the frozen budgets. These are informational, not hardware-dependent CI thresholds. See [Production workflows](PRODUCTION-WORK.md).
 
 `AnimationPlayback.test.ts` covers inclusive frame timing, independent clocks, priority,
 one-shot completion, missing clips, child scopes, Actions, migration, 2D event/outcome

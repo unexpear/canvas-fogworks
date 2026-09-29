@@ -5,6 +5,7 @@
 const { app, BrowserWindow } = require("electron");
 const { buildSync } = require("esbuild");
 const fs = require("fs"), path = require("path"), os = require("os");
+const budgets = require("./benchmark-budgets");
 const root = path.join(__dirname, "..");
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-gpu-benchmark-"));
 app.setPath("userData", profile);
@@ -96,10 +97,16 @@ app.whenReady().then(async () => {
             return results;
         })()`);
         const unavailable = payload && payload.available === false;
-        console.log(JSON.stringify({ electron: process.versions.electron, chromium: process.versions.chrome,
+        const report = { electron: process.versions.electron, chromium: process.versions.chrome,
+            platform: process.platform, arch: process.arch, cpu: os.cpus()[0]?.model ?? "unknown",
+            cpuCount: os.cpus().length, totalMemMiB: Math.round(os.totalmem() / 1048576), node: process.version,
             ...(unavailable ? { available: false, reason: payload.reason, results: [] } : { available: true, results: payload }),
             notes: ["Warmed samples (20, or fewer for the larger textured scenes). CPU submission excludes frame construction; GPU queries exclude CPU work and presentation.",
-                "A missing WebGL context is unavailable, not a zero time. Unsupported or disjoint GPU timings are null. No hardware-independent release threshold is asserted."] }, null, 2));
+                "A missing WebGL context is unavailable, not a zero time. Unsupported or disjoint GPU timings are null. No hardware-independent release threshold is asserted.",
+                "hostSample labels the renderer as hardware, software, unavailable, or unknown. Software GL is excluded from hardware budgets. Recording the sample does not move the frozen Iris Xe budgets."] };
+        report.hostSample = budgets.hostSampleFromGpuReport(report, { recorded: new Date().toISOString().slice(0, 10) });
+        report.budgetComparison = budgets.compareHostSample(report.hostSample);
+        console.log(JSON.stringify(report, null, 2));
         clearTimeout(timeout); win.destroy(); app.quit();
     } catch (error) { console.error(error); clearTimeout(timeout); app.exit(1); }
 });

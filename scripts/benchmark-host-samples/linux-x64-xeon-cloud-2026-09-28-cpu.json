@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "linux-x64-xeon-cloud-2026-09-28-cpu",
+  "recorded": "2026-09-28",
+  "kind": "cpu",
+  "rendererKind": "cpu",
+  "renderer": null,
+  "admitsToReleaseBudget": false,
+  "admitsToHardwareBudget": false,
+  "host": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "node": "v22.14.0",
+    "cpuCount": 4,
+    "totalMemMiB": 16014,
+    "gcControlled": true
+  },
+  "p95Ms": {
+    "animated-meshes-100": 17.282,
+    "asset-reload": 0.946,
+    "components-500": 4.267,
+    "gameplay-100": 7.427,
+    "pixel-workshop-frame": 1.739,
+    "raster-1024-decode": 7.897,
+    "raster-1024-encode": 5.705,
+    "raster-2048-noisy-decode": 37.499,
+    "raster-2048-noisy-encode": 494.838,
+    "rect-1000-frame": 2.483,
+    "rect-1000-load": 3.332,
+    "rect-250-frame": 1.459,
+    "rect-250-load": 1.555,
+    "relay-frame": 0.353,
+    "skin-3000": 3.103,
+    "textured-billboards-80": 1.133,
+    "textured-rasters-frame": 481.361
+  },
+  "note": "Later 2026-09-28 cloud VM measurement, not a replacement of the frozen linux-x64-node-22.14.0-xeon-2026-09-28 cohort. Linux x64, Node 22.14.0, 4 vCPU Intel Xeon, 16014 MiB, node --expose-gc. CPU only. Not a physical GPU host. Rows that exceed the frozen budget stay recorded and do not move it."
+}

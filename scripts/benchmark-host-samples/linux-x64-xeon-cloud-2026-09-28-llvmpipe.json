@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "linux-x64-xeon-cloud-2026-09-28-llvmpipe",
+  "recorded": "2026-09-28",
+  "kind": "gpu",
+  "rendererKind": "software",
+  "renderer": "ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL 4.5)",
+  "admitsToReleaseBudget": false,
+  "admitsToHardwareBudget": false,
+  "host": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "node": "v24.18.0",
+    "electron": "43.2.0",
+    "chromium": "150.0.7871.129",
+    "cpuCount": 4,
+    "totalMemMiB": 16014
+  },
+  "p95Ms": {
+    "animated-meshes-100": 11.341,
+    "pixel-workshop": 17.535,
+    "relay": 5.247,
+    "textured-billboards-80": 30.429,
+    "textured-rasters": 10.462
+  },
+  "cpuSubmissionP95Ms": {
+    "animated-meshes-100": 267.1,
+    "pixel-workshop": 7.5,
+    "relay-1.vde": 2,
+    "relay-2.vde": 1.8,
+    "relay-3.vde": 2,
+    "textured-billboards-80": 23.3,
+    "textured-rasters": 1.5
+  },
+  "stageP95Ms": {
+    "relay-1.vde": 3.459,
+    "relay-2.vde": 2.226,
+    "relay-3.vde": 5.247
+  },
+  "relayAggregation": "max-stage-gpu-p95",
+  "note": "Same cloud VM with Electron --ignore-gpu-blocklist --enable-unsafe-swiftshader. ANGLE llvmpipe (Mesa, LLVM 20.1.2) is software GL and is excluded from hardware GPU budgets. animated-meshes-100 and textured-billboards-80 each dropped one invalid GPU timer sample; their GPU p95 uses the samples that completed. cpuSubmissionP95Ms is not a GPU budget."
+}
