@@ -15,7 +15,7 @@ The first command packages the existing build with a **synthetic 0.0.4 package v
 
 The preparation manifest also stages `historical-release-0.0.4.vde`. That file is an owned project whose envelope is the legacy app-version stamp `0.0.4`, the on-disk format those releases wrote and which the loader still accepts as schema 1. It is not a historical installer binary. After each current-version install, the guest opens that file in the installed executable, saves it, and requires the current document schema plus the original rectangle.
 
-The preparation command prints the `.wsb` configuration, the results directory, and the separate host command `npm run validate:hardware-gpu`. It copies the two installers, Node executable, test harness, owned fixture, historical project and expected hashes into a fresh temporary folder. It does not launch or install them. Open the generated `.wsb` with Windows Sandbox, which must already be enabled; no host feature/security settings are changed by these scripts.
+The preparation command prints the `.wsb` configuration, the results directory, `OPERATOR.txt`, `evidence-plan.json`, the host hardware-GPU command, and the evidence-checker command. It copies the two installers, Node executable, test harness, owned fixture, historical project and expected hashes into a fresh temporary folder. It does not launch or install them. Open the generated `.wsb` with Windows Sandbox, which must already be enabled; no host feature/security settings are changed by these scripts. `OPERATOR.txt` is the pass/fail runbook for that staging folder. It is not itself a Sandbox result.
 
 ## Isolation and assertions
 
@@ -32,6 +32,42 @@ The preparation command prints the `.wsb` configuration, the results directory, 
 - Every installer phase is bounded to three minutes and each smoke to one minute. A failure leaves guest state for diagnosis. Result status and completed assertions are recorded in `results/result.json`; smoke output is captured alongside it. A passed guest result keeps `hardwareGpuValidation` at `not-certified-by-software-sandbox`.
 
 Close Windows Sandbox when inspection is complete to discard the guest. Host staging/results are retained for diagnosis. This harness is separate from the hosted CI job, which currently runs archive and unpacked-app gates only.
+
+## Record the extended pass
+
+A Linux host, including a Cursor cloud agent, cannot start Windows Sandbox or draw on a hardware GPU. Do not treat a plan file, this document, or exit 2 from the checker as that pass. The commands below are the manual gate.
+
+On a Windows host, from the repository, with the same D: process-local `TEMP`, `TMP`, and Electron builder caches used by the build launcher:
+
+```powershell
+npm run build:installer-test-baseline
+npm run prepare:installer-sandbox
+```
+
+Open the printed `installer-test.wsb`. Leave virtual GPU disabled. The guest writes `results\result.json` and one stdout/stderr pair per smoke phase. Startup phases use `<phase-id>-startup.stdout.log` and `<phase-id>-startup.stderr.log`. Workflow and historical-migration phases use `<phase-id>.stdout.log` and `<phase-id>.stderr.log`.
+
+Then, on that same Windows host and outside Sandbox, write the hardware verdict next to the guest result. The printed `hardwareGpuCommand` is this command with the staging path filled in:
+
+```powershell
+npm run validate:hardware-gpu -- --out SANDBOX_RESULTS\hardware-gpu.json
+```
+
+| Evidence file | Pass | Fail |
+| --- | --- | --- |
+| `results\result.json` | `status` is `passed`. `completedPhases` lists every extended phase in order. `hardwareGpuValidation` stays `not-certified-by-software-sandbox`. `virtualGpu` is `disabled`. Every smoke log listed above is present. | `status` is `failed`, `error` is set, a phase is missing or repeated, or the guest claims a hardware GPU. |
+| `results\hardware-gpu.json` | `evidenceKind` is `host-hardware-gpu`, `sandbox` is false, `drawOk` is true, and the renderer string classifies as hardware. `validate:hardware-gpu` exits 0. | Software renderers (SwiftShader, llvmpipe, Microsoft Basic Render Driver) and a lost WebGL context. Exit 2 is that failure. Exit 1 is a timeout or crash. |
+
+Check the pair from any machine that has the files:
+
+```powershell
+npm run check:installer-evidence -- --guest SANDBOX_RESULTS\result.json --gpu SANDBOX_RESULTS\hardware-gpu.json
+```
+
+- Exit 0: both files match the extended contract. `RELEASE-001` stays open in `docs/BACKLOG.json` until a person reviews the files and updates that item. The checker does not launch Sandbox or draw on a GPU.
+- Exit 1: the harness contract is broken, a file is unreadable, only one file was passed, or a file fails the table above.
+- Exit 2: no evidence files were supplied. The JSON report keeps `release001` at `open`. This is the dry run, and it is not a pass.
+
+`npm run check:installer-evidence -- --plan-out SOME_DIRECTORY` writes `OPERATOR.txt` and `evidence-plan.json` without installers. The September 7 `result.json` files do not satisfy this checker: they predate historical migration, assisted GUI, per-machine installation, and `completedPhases`.
 
 ## Local attempt — 2026-09-05
 
@@ -64,7 +100,7 @@ The complete sequence passed again for the branded September 7 build, SHA-256 `D
 
 ## Scope limitations
 
-The extended guest phases are implemented in the harness. The September 7 run remains the last recorded full Sandbox lifecycle, and that run did not include historical migration, assisted GUI navigation or per-machine installation. Executing the extended guest and recording a host `validate:hardware-gpu` verdict are still required before those phases count as a pass. A software-rendered guest result is not hardware-GPU certification, and virtual GPU stays disabled.
+The extended guest phases are implemented in the harness, and `check:installer-evidence` can score their result files. The September 7 run remains the last recorded full Sandbox lifecycle, and that run did not include historical migration, assisted GUI navigation or per-machine installation. No later Sandbox `result.json` or host `hardware-gpu.json` has been recorded. Executing the extended guest and recording a host `validate:hardware-gpu` verdict are still required before those phases count as a pass. A software-rendered guest result is not hardware-GPU certification, and virtual GPU stays disabled. Exit 2 from the checker is the open manual gate.
 
 This does not certify signing or SmartScreen reputation. Preservation asserts unchanged recovery bytes, not successful recovery UI restoration. The full Open–Edit–Save workflow remains on the silent per-user path; GUI and per-machine installs run startup and historical migration. The September 7 branding build includes an original vector icon. Personal publisher information and signing are intentionally omitted at the user's request; Windows may identify it as an unknown publisher. The package gate rejects publisher metadata and signing configuration, and the guest rejects a CompanyName or an Authenticode signature.
 

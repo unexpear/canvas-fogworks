@@ -1,5 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -10,6 +11,10 @@ const {
     guestLifecyclePhases, hostHardwareGpuPhase, readSchemaVersion, sandboxConfigurationXml,
     silentInstallArguments, silentUninstallArguments, prepareInstallerSandbox
 } = require("./installerLifecycle");
+const {
+    assertHarnessContract, evaluateGuestLifecycleResult, evaluateHardwareGpuEvidence,
+    expectedGuestSmokeLogs, readJsonFile, runInstallerEvidenceCheck, writeInstallerEvidencePlan
+} = require("./installerEvidence");
 
 const guestScript = fs.readFileSync(path.join(__dirname, "test-installer-sandbox.ps1"), "utf8");
 
@@ -52,6 +57,8 @@ test("software renderers cannot certify hardware", () => {
     }
     assert.equal(classifyGpuRenderer("WebKit WebGL").kind, "unknown");
     assert.equal(hardwareGpuVerdict(hardware, { drawOk: true }).sandbox, false);
+    assert.equal(hardwareGpuVerdict(hardware, { drawOk: true }).evidenceKind, "host-hardware-gpu");
+    assert.equal(hardwareGpuVerdict(hardware, { drawOk: true }).virtualGpu, "not-used");
 });
 
 test("silent NSIS arguments keep scope flags and an unquoted final directory", () => {
@@ -92,6 +99,11 @@ test("guest phases cover migration, assisted GUI and per-machine install, and th
     assert.match(guestScript, /all users/);
     assert.match(guestScript, /CompanyName must stay blank/);
     assert.match(guestScript, /NotSigned/);
+    assert.match(guestScript, /function Complete-Phase/);
+    assert.match(guestScript, /evidenceKind = 'windows-sandbox-installer-lifecycle'/);
+    assert.match(guestScript, /virtualGpu = 'disabled'/);
+    assert.match(guestScript, /Complete-Phase 'unsigned-anonymous'/);
+    assert.match(guestScript, /\$label-startup\.stdout\.log/);
     assert.doesNotMatch(guestScript, /validate-hardware-gpu/);
     const host = hostHardwareGpuPhase();
     assert.equal(host.runsInSandbox, false);
@@ -153,4 +165,122 @@ test("staging refuses publisher metadata before copying installers", t => {
         archive: file("archive.asar"),
         inputs: [[file("current.exe"), "current.exe"], [file("baseline.exe"), "baseline.exe"]]
     }), /author/);
+});
+
+function passingGuestResult() {
+    return {
+        status: "passed",
+        evidenceKind: "windows-sandbox-installer-lifecycle",
+        virtualGpu: "disabled",
+        completedPhases: guestLifecyclePhases().map(phase => phase.id),
+        hardwareGpuValidation: "not-certified-by-software-sandbox",
+        syntheticBaseline: true,
+        historicalReleaseInstaller: false,
+        publisherMetadata: false,
+        signing: false,
+        error: null
+    };
+}
+
+function passingGpuRecord() {
+    return hardwareGpuVerdict("ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)", { drawOk: true });
+}
+
+function writeSmokeLogs(directory) {
+    for (const name of expectedGuestSmokeLogs()) fs.writeFileSync(path.join(directory, name), "");
+}
+
+test("harness contract matches the guest script and keeps virtual GPU disabled", () => {
+    assert.equal(assertHarnessContract().ok, true);
+    const broken = assertHarnessContract({ guestScript: "no phases here", sandboxXml: "<vGPU>Enable</vGPU>" });
+    assert.equal(broken.ok, false);
+    assert.ok(broken.failures.length >= 2);
+});
+
+test("guest evidence accepts a complete software-sandbox result and rejects hardware claims", t => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-evidence-guest-"));
+    t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+    writeSmokeLogs(temporary);
+    const passed = passingGuestResult();
+    assert.equal(evaluateGuestLifecycleResult(passed, { resultsDir: temporary }).acceptable, true);
+    assert.equal(evaluateGuestLifecycleResult(passed, { resultsDir: temporary }).certifiesHardwareGpu, false);
+    const missingLog = fs.mkdtempSync(path.join(temporary, "empty-"));
+    assert.match(evaluateGuestLifecycleResult(passed, { resultsDir: missingLog }).failures.join("\n"), /Missing smoke logs/);
+    const claimed = { ...passed, hardwareGpuValidation: "certified", certifiesHardware: true };
+    const claim = evaluateGuestLifecycleResult(claimed, { resultsDir: temporary });
+    assert.equal(claim.acceptable, false);
+    assert.match(claim.failures.join("\n"), /not-certified-by-software-sandbox/);
+    assert.match(claim.failures.join("\n"), /cannot certify a hardware GPU/);
+    const partial = { ...passed, completedPhases: "unsigned-anonymous", status: "failed", error: "GUI timed out" };
+    const incomplete = evaluateGuestLifecycleResult(partial);
+    assert.equal(incomplete.acceptable, false);
+    assert.match(incomplete.failures.join("\n"), /fresh-per-user/);
+    assert.match(incomplete.failures.join("\n"), /GUI timed out/);
+});
+
+test("hardware evidence is recomputed from the renderer string", () => {
+    assert.equal(evaluateHardwareGpuEvidence(passingGpuRecord()).acceptable, true);
+    const forged = { ...passingGpuRecord(), renderer: "Google SwiftShader", certifiesHardware: true, classification: "hardware" };
+    const rejected = evaluateHardwareGpuEvidence(forged);
+    assert.equal(rejected.acceptable, false);
+    assert.match(rejected.failures.join("\n"), /does not certify hardware/);
+    const sandbox = { ...passingGpuRecord(), sandbox: true };
+    assert.match(evaluateHardwareGpuEvidence(sandbox).failures.join("\n"), /sandbox must be false/);
+});
+
+test("evidence checker leaves RELEASE-001 open when no Sandbox files are supplied", t => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-evidence-plan-"));
+    t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+    const dryRun = runInstallerEvidenceCheck(["--plan-out", temporary]);
+    assert.equal(dryRun.exitCode, 2);
+    assert.equal(dryRun.report.release001, "open");
+    assert.equal(dryRun.report.evidenceAcceptable, false);
+    assert.equal(dryRun.report.executedOnThisHost, false);
+    assert.equal(dryRun.report.guestEvidence, "not-supplied");
+    assert.equal(dryRun.report.sandboxPassRecorded, false);
+    const operator = fs.readFileSync(path.join(temporary, "OPERATOR.txt"), "utf8");
+    assert.match(operator, /not a Windows Sandbox pass/);
+    assert.match(operator, /npm run check:installer-evidence --/);
+    assert.match(operator, /validate:hardware-gpu/);
+    assert.match(operator, /<vGPU>|virtual GPU: disabled/i);
+    const withSpace = writeInstallerEvidencePlan(temporary, { resultsDir: path.join(temporary, "results folder") });
+    assert.match(withSpace.checkerCommand, /--guest "[^"]*results folder[/\\]result\.json"/);
+    const bom = path.join(temporary, "bom.json");
+    fs.writeFileSync(bom, `\uFEFF${JSON.stringify({ ok: true })}`);
+    assert.deepEqual(readJsonFile(bom), { ok: true });
+});
+
+test("evidence checker accepts only a paired guest result and host GPU file", t => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-evidence-pair-"));
+    t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+    const guest = path.join(temporary, "result.json");
+    const gpu = path.join(temporary, "hardware-gpu.json");
+    writeSmokeLogs(temporary);
+    fs.writeFileSync(guest, JSON.stringify(passingGuestResult()));
+    fs.writeFileSync(gpu, JSON.stringify(passingGpuRecord()));
+    const accepted = runInstallerEvidenceCheck(["--guest", guest, "--gpu", gpu]);
+    assert.equal(accepted.exitCode, 0);
+    assert.equal(accepted.report.evidenceAcceptable, true);
+    assert.equal(accepted.report.release001, "open");
+    assert.equal(accepted.report.executedOnThisHost, false);
+    assert.match(accepted.report.note, /did not launch Windows Sandbox/);
+    fs.writeFileSync(gpu, JSON.stringify({ ...passingGpuRecord(), renderer: "llvmpipe (LLVM 15.0.7, 256 bits)", certifiesHardware: true }));
+    const rejected = runInstallerEvidenceCheck(["--guest", guest, "--gpu", gpu]);
+    assert.equal(rejected.exitCode, 1);
+    assert.equal(rejected.report.release001, "open");
+    assert.equal(rejected.report.evidenceAcceptable, false);
+    assert.equal(runInstallerEvidenceCheck(["--guest", guest]).exitCode, 1);
+    assert.equal(runInstallerEvidenceCheck(["--mystery"]).exitCode, 1);
+});
+
+test("check-installer-evidence without files exits 2", () => {
+    const result = spawnSync(process.execPath, [path.join(__dirname, "check-installer-evidence.js")], { encoding: "utf8" });
+    assert.equal(result.status, 2, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.release001, "open");
+    assert.equal(report.evidenceAcceptable, false);
+    assert.equal(report.executedOnThisHost, false);
+    assert.equal(report.guestEvidence, "not-supplied");
+    assert.equal(report.hardwareGpuEvidence, "not-supplied");
+    assert.match(report.note, /not a Windows Sandbox pass/);
 });

@@ -13,15 +13,28 @@ $guiMachine = 'C:\FogworksInstallerTest\GuiPerMachine'
 $resultPath = 'C:\FogworksResults\result.json'
 $script:GuiReady = $false
 $steps = [System.Collections.Generic.List[string]]::new()
+$completed = [System.Collections.Generic.List[string]]::new()
 $result = [ordered]@{
-    status = 'running'; steps = @(); error = $null; syntheticBaseline = $true
+    status = 'running'; evidenceKind = 'windows-sandbox-installer-lifecycle'; virtualGpu = 'disabled'
+    completedPhases = @(); steps = @(); error = $null; syntheticBaseline = $true
     historicalReleaseInstaller = $false; hardwareGpuValidation = 'not-certified-by-software-sandbox'
     publisherMetadata = $false; signing = $false
+}
+function Write-Result {
+    # .NET Framework WriteAllText is UTF-8 without a BOM. Set-Content -Encoding UTF8 is not.
+    [System.IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json -Depth 6))
 }
 function Record-Step([string]$message) {
     $steps.Add($message)
     $result.steps = @($steps.ToArray())
-    $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $resultPath -Encoding UTF8
+    Write-Result
+}
+function Complete-Phase([string]$id, [string]$message) {
+    if ([string]::IsNullOrWhiteSpace($id)) { throw 'A lifecycle phase id is required.' }
+    if ($completed.Contains($id)) { throw "Phase '$id' was recorded twice." }
+    $completed.Add($id)
+    $result.completedPhases = @($completed.ToArray())
+    Record-Step $message
 }
 function Run-Checked([string]$file, [string]$arguments, [string]$label) {
     $process = Start-Process -FilePath $file -ArgumentList $arguments -PassThru -WindowStyle Hidden
@@ -94,7 +107,7 @@ function Smoke-Workflow([string]$label, [string]$exe) {
     $null = $process.Handle
     if (-not $process.WaitForExit(60000)) { throw "$label timed out." }
     if ($process.ExitCode -ne 0) { throw "$label failed; see captured logs." }
-    Record-Step "$label passed"
+    Complete-Phase $label "$label passed"
 }
 function Smoke-Startup([string]$label, [string]$exe) {
     $stdout = "C:\FogworksResults\$label-startup.stdout.log"
@@ -103,7 +116,7 @@ function Smoke-Startup([string]$label, [string]$exe) {
     $null = $process.Handle
     if (-not $process.WaitForExit(60000)) { throw "$label startup smoke timed out." }
     if ($process.ExitCode -ne 0) { throw "$label startup smoke failed; see captured logs." }
-    Record-Step "$label startup smoke passed"
+    Complete-Phase $label "$label startup smoke passed"
 }
 function Smoke-Historical([string]$label, [string]$exe) {
     $source = Join-Path $work $manifest.historical.file
@@ -119,7 +132,7 @@ function Smoke-Historical([string]$label, [string]$exe) {
     $saved = Get-Content -LiteralPath $project -Raw | ConvertFrom-Json
     if ($saved.version -ne $schema) { throw "$label saved schema $($saved.version), expected $schema." }
     $migratedHashes[$project] = (Get-FileHash -LiteralPath $project -Algorithm SHA256).Hash
-    Record-Step "$label passed"
+    Complete-Phase $label "$label passed"
 }
 function Uninstall-App([string]$label, [string]$scope, [string]$root) {
     $uninstaller = Join-Path $root 'Uninstall Canvas Fogworks.exe'
@@ -134,7 +147,7 @@ function Uninstall-App([string]$label, [string]$scope, [string]$root) {
         throw 'Uninstall left executable or registration behind.'
     }
     Assert-Preserved
-    Record-Step "$label removed executable/registration and preserved project/recovery bytes"
+    Complete-Phase $label "$label removed executable/registration and preserved project/recovery bytes"
 }
 function Install-Silent([string]$label, [string]$file, [string]$scope, [string]$destination, [string]$version, [bool]$checkArchive = $true) {
     $flag = if ($scope -eq 'allusers') { '/allusers' } else { '/currentuser' }
@@ -146,7 +159,7 @@ function Install-Silent([string]$label, [string]$file, [string]$scope, [string]$
         throw "$label archive differs from verified package."
     }
     Assert-Preserved
-    Record-Step "$label installed at $root"
+    Complete-Phase $label "$label installed at $root"
     return $root
 }
 function Ensure-GuiAutomation {
@@ -259,7 +272,7 @@ function Install-Assisted([string]$label, [string]$scope, [string]$destination, 
         throw "$label archive differs from verified package."
     }
     Assert-Preserved
-    Record-Step "$label installed at $root"
+    Complete-Phase $label "$label installed at $root"
     return $root
 }
 try {
@@ -284,7 +297,7 @@ try {
     }
     Assert-AnonymousUnsigned "$work\current.exe" 'Current installer'
     Assert-AnonymousUnsigned "$work\baseline.exe" 'Synthetic baseline installer'
-    Record-Step 'unsigned-anonymous installers have blank CompanyName and are NotSigned'
+    Complete-Phase 'unsigned-anonymous' 'unsigned-anonymous installers have blank CompanyName and are NotSigned'
     if (@(Installed-Entry 'currentuser').Count -ne 0 -or @(Installed-Entry 'allusers').Count -ne 0) {
         throw 'Sandbox is not clean: existing app registration.'
     }
@@ -332,6 +345,16 @@ try {
     Smoke-Startup 'gui-per-machine-startup-smoke' $guiMachineExe
     Smoke-Historical 'gui-per-machine-historical-migration' $guiMachineExe
     Uninstall-App 'gui-per-machine-uninstall' 'allusers' $guiMachineRoot
+    $expectedIds = @($manifest.phases | ForEach-Object { [string]$_.id })
+    $actualIds = @($completed.ToArray())
+    if (@($expectedIds).Count -ne @($actualIds).Count) {
+        throw "Completed $(@($actualIds).Count) phases; manifest lists $(@($expectedIds).Count)."
+    }
+    for ($i = 0; $i -lt @($expectedIds).Count; $i++) {
+        if ($actualIds[$i] -ne $expectedIds[$i]) {
+            throw "Completed phase '$($actualIds[$i])' where manifest requires '$($expectedIds[$i])'."
+        }
+    }
     $result.status = 'passed'
     Record-Step 'Lifecycle checks complete; close Sandbox to discard guest state'
 } catch {

@@ -37,6 +37,7 @@
     "validate:hardware-gpu": "electron scripts/validate-hardware-gpu.js",
     "build:installer-test-baseline": "electron-builder --win nsis --publish never --config.directories.output=release/installer-test-baseline --config.extraMetadata.version=0.0.4 --config.artifactName=TEST-ONLY-baseline-0.0.4.exe",
     "prepare:installer-sandbox": "node scripts/prepare-installer-sandbox.js",
+    "check:installer-evidence": "node scripts/check-installer-evidence.js",
     "lint": "node scripts/check-module-headers.js",
     "doc-drift": "node scripts/check-doc-drift.js",
     "mutate:dimensions": "node scripts/mutate-dimensions.js",

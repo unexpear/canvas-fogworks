@@ -35,12 +35,14 @@ function hardwareGpuVerdict(renderer, options = {}) {
     const classification = classifyGpuRenderer(renderer);
     const drawOk = options.drawOk === true;
     return {
+        evidenceKind: "host-hardware-gpu",
         renderer: renderer == null ? "" : String(renderer),
         classification: classification.kind,
         reason: classification.reason,
         drawOk,
         certifiesHardware: classification.kind === "hardware" && drawOk,
-        sandbox: false
+        sandbox: false,
+        virtualGpu: "not-used"
     };
 }
 
@@ -68,7 +70,11 @@ if (require.main === module) {
                 const vendor = debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
                 return { drawOk: gl.getError() === gl.NO_ERROR, renderer: String(renderer || ''), vendor: String(vendor || '') };
             })()`);
-            const verdict = { ...hardwareGpuVerdict(sample.renderer, { drawOk: sample.drawOk }), vendor: sample.vendor };
+            const verdict = {
+                ...hardwareGpuVerdict(sample.renderer, { drawOk: sample.drawOk }),
+                vendor: sample.vendor,
+                recordedAt: new Date().toISOString()
+            };
             const outAt = process.argv.indexOf("--out");
             const body = JSON.stringify(verdict, null, 2);
             if (outAt >= 0 && process.argv[outAt + 1]) fs.writeFileSync(path.resolve(process.argv[outAt + 1]), body);
