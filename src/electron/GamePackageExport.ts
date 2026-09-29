@@ -259,14 +259,15 @@ export function game3DHtml(serialized: string, bundle: Buffer, provenance?: Game
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Canvas Fogworks — 3D Player</title>
-<style>body{margin:0;background:#17191f;color:#eee;font:15px system-ui}header{padding:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{padding:8px 16px}canvas{display:block;width:100%;height:calc(100vh - 140px);min-height:100px}p{padding:0 12px}#status,#diagnostics{overflow-wrap:anywhere}#diagnostics{color:#f3d48a}</style></head><body>
+<style>body{margin:0;background:#17191f;color:#eee;font:15px system-ui}header{padding:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{padding:8px 16px}#viewport{position:relative}#viewport canvas{display:block;width:100%;height:calc(100vh - 140px);min-height:100px}#text{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}p{padding:0 12px}#status,#diagnostics{overflow-wrap:anywhere}#diagnostics{color:#f3d48a}</style></head><body>
 <header><strong>Canvas Fogworks · 3D Player</strong><button id="start">Restart</button><button id="pause">Pause</button><button id="stop">Stop</button><button id="retry" hidden>Retry level</button></header>
 <p id="status" role="status" aria-live="polite">Checking package…</p>
 <p id="diagnostics" role="status" hidden></p>
 <p id="fonts" hidden></p>
+<p id="audio" hidden></p>
 <header><button id="checkpoint">Set checkpoint</button><button id="respawn">Respawn</button><button id="save-progress">Save progress</button><button id="load-progress">Load progress</button><button id="input-settings" type="button" aria-expanded="false" aria-controls="input-settings-panel">Controls</button><span id="progress-note" role="status"></span></header>
 <div id="input-settings-panel" hidden></div>
-<canvas id="scene" tabindex="0" aria-label="3D game viewport"></canvas>
+<div id="viewport"><canvas id="scene" tabindex="0" aria-label="3D game viewport"></canvas><canvas id="text" aria-hidden="true"></canvas></div>
 <p id="input-summary">WASD / arrows: move · Q/E: down/up · Shift: faster · F: interact. Focus loss pauses; use Resume to continue.</p>
 <script id="game-provenance" type="application/json">${report}</script>
 <script id="game-data" type="application/octet-stream" data-sha256="${digest}">${Buffer.from(serialized).toString("base64")}</script>

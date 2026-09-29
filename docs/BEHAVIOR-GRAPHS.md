@@ -10,6 +10,9 @@ See [the active delivery goal](GAMEPLAY-FIVE-PART-GOAL.md) for current progress
 and remaining verification; the five-part goal is not complete.
 
 <!-- describes: src/core/document/BehaviorGraph.ts, src/core/document/Entity.ts, src/core/runtime/BehaviorRunner.ts, src/core/runtime/BehaviorRuntime.ts, src/core/runtime/BehaviorProgress.ts, src/core/document/BehaviorAssets.ts, src/core/actions/SetBehaviorAssetsAction.ts, src/app/BehaviorDebugPanel.tsx, src/runtime/PlayerProgress.ts, src/runtime/CampaignProgress.ts, src/core/runtime/GameplaySession.ts, src/core/runtime/Gameplay3D.ts, src/core/runtime/Interaction.ts, src/core/runtime/World.ts, src/app/BehaviorGraphPanel.tsx, src/app/GameplayPanel.tsx, scripts/smoke-behavior.js -->
+<!-- re-read 2026-09-28: Gameplay3D collects embedded sound cues for the host, including a
+     behavior step. Graph execution, function libraries, typed values and progress contracts
+     in this document are unchanged. -->
 
 Delivered 2026-09-16: the first event-driven visual logic system for both 2D and 3D gameplay.
 Updated 2026-09-19: simulation-time delays, bounded repeats, reusable project graph assets and an editor debugger are implemented; verification is recorded below.

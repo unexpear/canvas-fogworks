@@ -132,18 +132,23 @@ file-workflow/level/authoring/player smokes pass. The new unsigned example at
 This build adds only `progressPreload.js` to the earlier three-file ASAR allowlist. Existing
 artifacts were retained; full process-crash/relaunch save acceptance is not claimed.
 
+Screen-space `core.text` is drawn on a transparent canvas over the WebGL view, using the same
+typesetter as the 2D player and any packaged font faces. Text that also has a 3D transform is not
+projected as glyphs. Embedded sound rules use the shared Web Audio player. A cue that fires before
+the context is running is held until the next click or key, then played once. This is the existing
+bounded voice path, not streaming music or mixer buses.
+
 `npm run smoke:player-acceptance` packages an owned scene that uses a custom face and an embedded
 sound cue, deletes the source project and font directory, and launches the HTML under an isolated
-profile. It checks WebGL presentation, registration of the packaged face, visible diagnostics for
-unplayed sound and undrawn 2D text, absent Node/editor authority, and a provenance record that
+profile. It checks WebGL presentation, registration of the packaged face, overlay text drawn with
+that face, playback of the embedded cue, absent Node/editor authority, and a provenance record that
 matches the HTML and contains no host path. It is included in `ci`. The harness asks Electron for SwiftShader so a blocklisted host GPU
 still has a context; that is clean-profile acceptance of the unpacked player, not hardware-GPU
 certification or a signed Windows image on a separate computer.
 
-Still open: separate clean Windows-machine certification of the unpacked EXE; playing embedded sound;
-drawing 2D text into the 3D view; prefab campaign snapshots, portable save files, multiple slots
-and cross-build save migrations; long-session/GPU/device-loss evidence; larger-content streaming; signatures,
-trusted updates and broader platform support. F1 remains partial.
+Still open: separate clean Windows-machine certification of the unpacked EXE; prefab campaign snapshots,
+portable save files, multiple slots and cross-build save migrations; long-session/GPU/device-loss evidence;
+larger-content streaming; signatures, trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.
 

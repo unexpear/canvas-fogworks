@@ -198,7 +198,7 @@ test("quoted font stacks keep commas inside a family name", () => {
 test("a packaged custom face is retained and a missing one is named", () => {
     const reader = load(attachFont(withLabel(fixture(), "Owned Face")));
     expect(reader.fonts.map(font => font.family)).toEqual(["Owned Face"]);
-    expect(reader.warnings.map(warning => warning.code)).toContain("undrawn-text");
+    expect(reader.warnings.map(warning => warning.code)).not.toContain("undrawn-text");
     expect(() => load(withLabel(fixture(), "Owned Face"))).toThrow(/custom font "Owned Face" on label/);
     const mismatch = attachFont(withLabel(fixture(), "Owned Face"));
     mismatch.fonts![0].family = "Other Face";
@@ -224,8 +224,14 @@ test("sound cues, morph targets and unsupported glTF requirements are diagnosed"
         action: { kind: "sound", source: "data:audio/wav;base64,AAAA", volume: 1 } }] };
     sound.levels[0].content = JSON.stringify(doc);
     const reader = load(sound);
-    expect(reader.warnings.map(warning => warning.code)).toContain("sound-cue");
-    expect(reader.warnings.find(warning => warning.code === "sound-cue")!.detail).toContain("triangle");
+    expect(reader.warnings.map(warning => warning.code)).not.toContain("sound-cue");
+    const projected = withLabel(fixture(), "Owned Face");
+    const projectedDoc = JSON.parse(projected.levels[0].content);
+    projectedDoc.document.nodes.label.spatial3d = { transform: projectedDoc.document.nodes.triangle.spatial3d.transform };
+    projected.levels[0].content = JSON.stringify(projectedDoc);
+    const projectedReader = load(attachFont(projected));
+    expect(projectedReader.warnings.map(warning => warning.code)).toContain("spatial-text");
+    expect(projectedReader.warnings.find(warning => warning.code === "spatial-text")!.detail).toContain("label");
     const morph = fixture(), json = JSON.parse(Buffer.from(morph.files[0].data, "base64").toString("utf8"));
     json.meshes[0].primitives[0].targets = [{}];
     const encoded = Buffer.from(JSON.stringify(json));

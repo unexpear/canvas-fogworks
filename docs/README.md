@@ -58,7 +58,7 @@ For clip browsing, preview and state-driven playback, see [Animation workflow](A
 | [ENGINE-ROADMAP.md](ENGINE-ROADMAP.md) | Full dual-track engine plan: 22 major gap work packages, delivery phases, acceptance gates and decision register | Planned |
 | [PLAYER-RUNTIME.md](PLAYER-RUNTIME.md) | Shared level/asset loading and 3D session lifecycle; clean-machine release gate remains open | Partial |
 | [GAME-PACKAGE.md](GAME-PACKAGE.md) | Inline v1 manifest, allowlisted resolver and bounded package contract | Partial |
-| [STANDALONE-PLAYER.md](STANDALONE-PLAYER.md) | 3D HTML export, fonts, diagnostics, unsigned provenance and clean-profile acceptance; separate Windows EXE certification pending | Partial |
+| [STANDALONE-PLAYER.md](STANDALONE-PLAYER.md) | 3D HTML export, fonts, embedded cues, screen-space text, diagnostics, unsigned provenance and clean-profile acceptance; separate Windows EXE certification pending | Partial |
 | [GAMEPLAY-FOUNDATIONS.md](GAMEPLAY-FOUNDATIONS.md) | Named input, 2D/3D interaction/spawn/checkpoint rules and bounded player progress saves | Partial |
 | [BEHAVIOR-GRAPHS.md](BEHAVIOR-GRAPHS.md) | Visual event/branch/action graphs, shared runtime execution, validated links and authoring undo | First slice delivered |
 

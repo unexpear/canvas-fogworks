@@ -1,13 +1,16 @@
 /**
  * @module PlayerHost3D
- * @description Browser event/frame owner for a read-only 3D session, with explicit error retry and teardown.
+ * @description Browser event/frame owner for a read-only 3D session, with sound cues, screen-space text and teardown.
  */
 import { PlayerSession3D } from "../runtime/PlayerSession3D";
+import { applyWorld3D } from "../core/runtime/World3D";
 import { disposeWebGL3D, emitWebGL3D, lastWebGL3DFailure } from "../renderer/emitWebGL3D";
 import { ActionBindings, InputActions, PLAYER_ACTIONS } from "../core/runtime/InputActions";
 import { browserInputStorage, eventCode, inputBindingsInclude, inputSettingsSummary, readInputSettings, spatialInput, writeInputSettings } from "../core/runtime/InputSettings";
 import { mountInputSettings } from "../core/runtime/InputSettingsView";
 import type { ProgressStore } from "../runtime/ProgressStore";
+import { RuntimeAudio } from "../runtime/RuntimeAudio";
+import { drawPlayerText } from "./textOverlay";
 
 export function playerInput3D(keys: ReadonlySet<string>, bindings: ActionBindings = PLAYER_ACTIONS) {
     const actions = new InputActions(bindings); keys.forEach(key => actions.setKey(key,true)); return spatialInput(actions);
@@ -21,13 +24,44 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
     const stop = document.getElementById("stop") as HTMLButtonElement;
     const retry = document.getElementById("retry") as HTMLButtonElement;
     let bindings = readInputSettings(browserInputStorage());
-    const keys = new InputActions(bindings); let disposed = false, scheduled = 0, renderError: string | null = null, epoch = 0, saving = false;
+    const keys = new InputActions(bindings); let disposed = false, scheduled = 0, renderError: string | null = null, epoch = 0, saving = false, flushing = false;
     const publishInputSummary = () => {
         const summary = document.getElementById("input-summary");
         if (summary) summary.textContent = `${inputSettingsSummary(bindings)} Focus loss pauses; use Resume to continue.`;
     };
     publishInputSummary();
     const listeners: (() => void)[] = [];
+    const queued: { source: string; volume: number }[] = [];
+    const audioNote = document.getElementById("audio");
+    const audio = new RuntimeAudio(message => {
+        if (audioNote) { audioNote.dataset.state = "error"; audioNote.textContent = message; }
+    });
+    function hear(sounds: readonly { source: string; volume: number }[]) {
+        if (!sounds.length || disposed) return;
+        queued.push(...sounds);
+        if (queued.length > 32) queued.splice(0, queued.length - 32);
+        void flushAudio();
+    }
+    async function flushAudio() {
+        if (flushing || disposed) return;
+        flushing = true;
+        let accepted = false;
+        try {
+            const running = await audio.unlock();
+            if (!running || disposed) return;
+            accepted = true;
+            const batch = queued.splice(0, queued.length);
+            for (const sound of batch) {
+                if (disposed) return;
+                const played = await audio.play(sound);
+                if (played && audioNote) audioNote.dataset.played = String(Number(audioNote.dataset.played || "0") + 1);
+            }
+        } finally {
+            flushing = false;
+            if (accepted && !disposed && queued.length) void flushAudio();
+        }
+    }
+    function silence() { queued.length = 0; audio.stop(); }
     function on(target: EventTarget, type: string, handler: (event: any) => void) {
         target.addEventListener(type, handler); listeners.push(() => target.removeEventListener(type, handler));
     }
@@ -48,12 +82,12 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
         catch { /* Session retains its load error and last good frame; only explicit retry tries again. */ }
         update();
     }
-    on(start, "click", () => { epoch++; renderError = null; disposeWebGL3D(canvas); void load(() => session.restart()); });
-    on(pause, "click", () => { keys.clear(); if (session.status === "running") session.pause(); else session.resume(); update(); });
+    on(start, "click", () => { epoch++; silence(); renderError = null; disposeWebGL3D(canvas); void audio.unlock(); void load(() => session.restart()); });
+    on(pause, "click", () => { void flushAudio(); keys.clear(); if (session.status === "running") session.pause(); else session.resume(); update(); });
     on(stop, "click", () => {
-        epoch++; keys.clear(); session.stop(); renderError = null; disposeWebGL3D(canvas); canvas.width = canvas.width; update();
+        epoch++; keys.clear(); silence(); session.stop(); renderError = null; disposeWebGL3D(canvas); canvas.width = canvas.width; update();
     });
-    on(retry, "click", () => { void load(() => { session.resume(); return session.followTransition(); }); });
+    on(retry, "click", () => { void flushAudio(); void load(() => { session.resume(); return session.followTransition(); }); });
     const inputButton = document.getElementById("input-settings");
     const inputPanel = document.getElementById("input-settings-panel");
     if (inputButton && inputPanel) {
@@ -76,7 +110,7 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
         if (event.ctrlKey || event.altKey || event.metaKey) return;
         const code = eventCode(event);
         if (!code || !inputBindingsInclude(bindings, code)) return;
-        event.preventDefault(); keys.setKey(code, true);
+        event.preventDefault(); keys.setKey(code, true); void flushAudio();
         if (keys.pressed("interact")) session.interact();
     });
     on(window, "keyup", (event: KeyboardEvent) => { const code = eventCode(event); if (code) keys.setKey(code, false); });
@@ -112,11 +146,18 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
         try {
             if (!renderError) {
                 session.advance(timestamp, spatialInput(keys));
+                hear(session.takeSounds());
                 if (session.status === "running" && session.world?.transitionTo && !session.error) {
                     void load(() => session.followTransition());
                 }
                 const width = Math.max(1, Math.min(8192, Math.floor(canvas.clientWidth)));
                 const height = Math.max(1, Math.min(8192, Math.floor(canvas.clientHeight)));
+                const overlay = document.getElementById("text") as HTMLCanvasElement | null;
+                if (overlay) {
+                    const visual = session.document && session.world ? applyWorld3D(session.document, session.world) : null;
+                    if (visual) drawPlayerText(overlay, visual, width, height, Math.min(2, window.devicePixelRatio || 1));
+                    else { overlay.dataset.count = "0"; overlay.dataset.text = ""; overlay.dataset.font = ""; overlay.dataset.presented = "false"; }
+                }
                 const scene = session.frame(width, height);
                 if (scene && !emitWebGL3D(canvas, scene, Math.min(2, window.devicePixelRatio || 1))) {
                     throw new Error(lastWebGL3DFailure() ?? "WebGL rendering is unavailable.");
@@ -129,9 +170,10 @@ export function mountPlayer3D(session: PlayerSession3D, store?: ProgressStore): 
     function dispose() {
         if (disposed) return;
         disposed = true; epoch++; cancelAnimationFrame(scheduled); listeners.forEach(remove => remove());
-        keys.clear(); session.stop(); disposeWebGL3D(canvas);
+        keys.clear(); silence(); session.stop(); audio.dispose(); disposeWebGL3D(canvas);
     }
     on(window, "pagehide", dispose);
+    void audio.unlock();
     scheduled = requestAnimationFrame(frame);
     void load(() => { const pending = session.start(); if (document.hidden) session.pause(); return pending; });
     return dispose;

@@ -18,7 +18,18 @@
  * text nodes, not thousands of glyphs a frame — that is the cheaper mistake to make.
  */
 
-import { Paint, Shape, textParagraphs } from "./RenderModel";
+import { TextAlign } from "../core/document/Node";
+import { textParagraphs } from "./Typography";
+
+/** The text shape both Canvas and WebGL rasterise. Structurally the render model's text variant. */
+export interface TextShape {
+    kind: "text";
+    x: number; y: number; width: number; height: number; text: string;
+    fontSize: number; fontFamily: string; fontWeight: number; textAlign: TextAlign;
+    lineHeight: number; letterSpacing: number;
+}
+/** Fill and opacity are the only paint fields text rasterisation reads. */
+export interface TextPaint { fill: string | { flat: string } | null; opacity: number | null }
 
 /**
  * Greedy word wrap against `maxWidth` using the context's CURRENT font (callers set `font`
@@ -71,9 +82,6 @@ export function wrapTextWith(measure: (text: string) => number, text: string, ma
 }
 
 
-/** The text variant of `Shape`, narrowed once so the two functions below can share it. */
-export type TextShape = Extract<Shape, { kind: "text" }>;
-
 /**
  * Draw one text shape into a 2D context, at the shape's own coordinates.
  *
@@ -82,7 +90,7 @@ export type TextShape = Extract<Shape, { kind: "text" }>;
  * one of it. The context is left CLIPPED to the box, which is what the Canvas backend relied on and
  * what an offscreen raster wants anyway.
  */
-export function drawTextInto(ctx: CanvasRenderingContext2D, shape: TextShape, paint: Paint): void {
+export function drawTextInto(ctx: CanvasRenderingContext2D, shape: TextShape, paint: TextPaint): void {
     // Word-WRAPPED text: greedy line breaking against the box width via `measureText`
     // (set `font` FIRST — measurement depends on it), top-left origin (textBaseline
     // "top" reproduces the SVG box origin), clipped to the box. Line height mirrors the
@@ -148,7 +156,7 @@ export function textRasterScale(viewScale: number): number {
  * node must not throw its bitmap away. Getting that wrong is invisible — the text still looks
  * right, it is just re-rasterised on every frame of a drag.
  */
-export function textRasterKey(shape: TextShape, paint: Paint, scale: number): string {
+export function textRasterKey(shape: TextShape, paint: TextPaint, scale: number): string {
     return [
         shape.text, shape.width, shape.height, shape.fontSize, shape.fontFamily, shape.fontWeight,
         shape.textAlign, shape.lineHeight, shape.letterSpacing, paint.fill ?? "", paint.opacity ?? "", scale

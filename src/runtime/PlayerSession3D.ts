@@ -6,14 +6,14 @@
 
 import type { ReadonlyDocument } from "../core/document/Document";
 import { playerEntityId } from "../core/document/Entity";
-import { advanceWorld3D, applyWorld3D, respawnRun3D, world3DFrom } from "../core/runtime/World3D";
+import { advanceWorld3D, applyWorld3D, respawnRun3D, takeWorldSounds, world3DFrom } from "../core/runtime/World3D";
 import type { Input3D, World3DState } from "../core/runtime/World3D";
 import { applyAnimations, applyMotionFades } from "../core/runtime/AnimationPlayback";
 import { buildFrame3D } from "../renderer/Scene3D";
 import type { Frame3D } from "../renderer/Scene3D";
 import type { PlayerProjectReader } from "./ProjectReadHost";
 import { RuntimeProject } from "./RuntimeProject";
-import { checkpoint3D, interact3D } from "../core/runtime/Gameplay3D";
+import { checkpoint3D, interact3D, MAX_RULE_SOUNDS } from "../core/runtime/Gameplay3D";
 import { captureProgress3D, parseProgress, restoreProgress3D, serializeProgress } from "./PlayerProgress";
 import { CampaignState, campaignFromProgress, emptyCampaign, openCampaignLevel, rememberLeavingLevel, withCampaign } from "./CampaignProgress";
 
@@ -28,6 +28,7 @@ export class PlayerSession3D {
     private lastTimestamp: number | null = null;
     private failure: Error | null = null;
     private campaign: CampaignState = emptyCampaign();
+    private pendingSounds: { source: string; volume: number }[] = [];
 
     constructor(private readonly host: PlayerProjectReader, private readonly entryKey: string, private readonly gameId = "") {}
 
@@ -54,7 +55,7 @@ export class PlayerSession3D {
 
     interact(): void {
         if (this.status !== "running" || !this.active?.controlled) return;
-        this.active.world = interact3D(this.active.project.document!, this.active.world, this.active.controlled);
+        this.active.world = this.collect(interact3D(this.active.project.document!, this.active.world, this.active.controlled));
     }
     checkpoint(): void {
         if (this.status !== "running" || !this.active?.controlled) throw new Error("Start a level with a live player first.");
@@ -101,8 +102,23 @@ export class PlayerSession3D {
         });
     }
 
+    /** Cues collected since the previous take. Hosts play these; they are not part of the world. */
+    takeSounds(): readonly { source: string; volume: number }[] {
+        const sounds = this.pendingSounds;
+        this.pendingSounds = [];
+        return sounds;
+    }
+    private collect(world: World3DState): World3DState {
+        const taken = takeWorldSounds(world);
+        if (taken.sounds.length) {
+            this.pendingSounds.push(...taken.sounds);
+            if (this.pendingSounds.length > MAX_RULE_SOUNDS) this.pendingSounds.splice(0, this.pendingSounds.length - MAX_RULE_SOUNDS);
+        }
+        return taken.world;
+    }
     stop(): void {
         this.generation++;
+        this.pendingSounds = [];
         this.pending?.reset(); this.pending = null;
         this.active?.project.reset(); this.active = null;
         this.playing = false; this.failure = null; this.lastTimestamp = null;
@@ -117,6 +133,7 @@ export class PlayerSession3D {
 
     private async load(read: (staged: RuntimeProject) => Promise<boolean>, restore?: (doc: ReadonlyDocument, world: World3DState) => World3DState): Promise<boolean> {
         const generation = ++this.generation;
+        this.pendingSounds = [];
         this.pending?.reset();
         const staged = new RuntimeProject(); this.pending = staged;
         this.lastTimestamp = null; this.failure = null;
@@ -163,7 +180,7 @@ export class PlayerSession3D {
         const last = this.lastTimestamp; this.lastTimestamp = timestamp;
         if (last === null || timestamp < last) return;
         const inputs = current.controlled ? new Map([[current.controlled, { ...input }]]) : new Map<string, Input3D>();
-        current.world = advanceWorld3D(current.project.document!, current.world, (timestamp - last) / 1000, inputs);
+        current.world = this.collect(advanceWorld3D(current.project.document!, current.world, (timestamp - last) / 1000, inputs));
     }
 
     /** Returns a transient scene; the host owns decoding/upload readiness and GPU lifetime. */

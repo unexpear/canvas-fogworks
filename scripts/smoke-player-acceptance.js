@@ -17,6 +17,15 @@ app.setPath("userData", path.join(temp, "profile"));
 app.on("window-all-closed", () => {});
 const timeout = setTimeout(() => { console.error("Standalone acceptance timed out"); app.exit(1); }, 90000);
 app.on("quit", () => { try { fs.rmSync(temp, { recursive: true, force: true }); } catch { /* locked disposable profile may remain */ } });
+function ownedToneWav() {
+    const samples = 16, data = Buffer.alloc(44 + samples);
+    data.write("RIFF", 0); data.writeUInt32LE(36 + samples, 4); data.write("WAVE", 8);
+    data.write("fmt ", 12); data.writeUInt32LE(16, 16); data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22);
+    data.writeUInt32LE(8000, 24); data.writeUInt32LE(8000, 28); data.writeUInt16LE(1, 32); data.writeUInt16LE(8, 34);
+    data.write("data", 36); data.writeUInt32LE(samples, 40);
+    for (let i = 0; i < samples; i++) data[44 + i] = i % 2 ? 200 : 40;
+    return `data:audio/wav;base64,${data.toString("base64")}`;
+}
 function filesUnder(directory) {
     const out = [];
     const walk = current => {
@@ -43,10 +52,10 @@ app.whenReady().then(async () => {
     fs.mkdirSync(source); fs.mkdirSync(fonts);
     const doc = JSON.parse(fs.readFileSync(path.join(root, "reference-projects/animated-3d.vde"), "utf8"));
     doc.document.nodes.label = { id: "label", type: "core.text", parent: null, children: [],
-        geometry: { x: 8, y: 8, width: 200, height: 28 },
-        style: { fill: "#ffffff", opacity: 1, fontFamily: "\"Owned Face\", sans-serif" }, layout: {}, text: "Owned" };
+        geometry: { x: 8, y: 8, width: 80, height: 64 },
+        style: { fill: "#ffffff", opacity: 1, fontFamily: "\"Owned Face\", sans-serif", fontSize: 48 }, layout: {}, text: "A" };
     doc.document.nodes.triangle.entity = { rules: [{ event: "start", other: "any", target: "self",
-        action: { kind: "sound", source: "data:audio/wav;base64,AAAA", volume: 0.4 } }] };
+        action: { kind: "sound", source: ownedToneWav(), volume: 0.4 } }] };
     doc.document.rootNodeUuids.push("label");
     const project = path.join(source, "entry.vde");
     fs.writeFileSync(project, JSON.stringify(doc));
@@ -67,26 +76,40 @@ app.whenReady().then(async () => {
     if (provenance.manifestSha256 !== crypto.createHash("sha256").update(manifest).digest("hex")) throw new Error("Provenance manifest hash mismatch");
     if (provenance.sourceRevision !== null && !/^[0-9a-f]{7,64}$/.test(provenance.sourceRevision)) throw new Error("Provenance revision is not a commit id");
     if (!provenance.fonts.some(font => font.family === "Owned Face" && /^[0-9a-f]{64}$/.test(font.sha256))) throw new Error("Packaged font is missing from provenance");
-    const codes = provenance.warnings.map(warning => warning.code).sort();
-    if (JSON.stringify(codes) !== JSON.stringify(["sound-cue", "undrawn-text"])) throw new Error(`Unexpected diagnostics: ${codes.join(", ")}`);
+    const codes = provenance.warnings.map(warning => warning.code);
+    if (codes.length) throw new Error(`Unexpected diagnostics: ${codes.join(", ")}`);
     for (const blob of [manifest, html, JSON.stringify(provenance)]) {
         if (blob.includes(temp) || blob.includes(source) || blob.includes(root)) throw new Error("Package leaked a host path");
     }
     const win = await createGameWindow(path.join(output, "app/game.html"), { show: false });
     win.webContents.setBackgroundThrottling(false);
-    await until(win, 'document.getElementById("scene").dataset.presented === "true"');
+    await until(win, 'document.getElementById("scene").dataset.presented === "true" && document.getElementById("text").dataset.presented === "true"');
+    await win.webContents.executeJavaScript('document.getElementById("pause").click()');
+    await until(win, 'Number(document.getElementById("audio").dataset.played || "0") >= 1');
     const report = await win.webContents.executeJavaScript(`({
         authority: typeof window.electronAPI === "undefined" && typeof require === "undefined",
         fonts: document.getElementById("fonts").dataset.loaded,
         diagnostics: document.getElementById("diagnostics").textContent,
-        count: document.getElementById("diagnostics").dataset.count,
-        loaded: [...document.fonts].some(face => face.family.replaceAll('"', "") === "Owned Face" && face.status === "loaded")
+        hidden: document.getElementById("diagnostics").hidden,
+        played: document.getElementById("audio").dataset.played,
+        text: document.getElementById("text").dataset.text,
+        overlayFont: document.getElementById("text").dataset.font,
+        loaded: [...document.fonts].some(face => face.family.replaceAll('"', "") === "Owned Face" && face.status === "loaded"),
+        ink: (() => {
+            const canvas = document.getElementById("text"), ctx = canvas.getContext("2d");
+            const pixels = ctx.getImageData(0, 0, Math.min(canvas.width, 160), Math.min(canvas.height, 120)).data;
+            let ink = 0;
+            for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 0) ink++;
+            return ink;
+        })()
     })`);
     if (!report.authority) throw new Error("Editor or Node authority leaked into the player");
     if (report.fonts !== "Owned Face" || !report.loaded) throw new Error(`Packaged font was not registered: ${JSON.stringify(report)}`);
-    if (report.count !== "2" || !report.diagnostics.includes("embedded sound") || !report.diagnostics.includes("does not draw 2D text")) {
-        throw new Error(`Diagnostics were not visible: ${JSON.stringify(report)}`);
+    if (!report.hidden || report.diagnostics) throw new Error(`Unexpected player diagnostics: ${JSON.stringify(report)}`);
+    if (report.text !== "A" || !report.overlayFont.includes("Owned Face") || report.ink < 1) {
+        throw new Error(`Screen-space text was not drawn: ${JSON.stringify(report)}`);
     }
+    if (Number(report.played) < 1) throw new Error(`Embedded sound was not played: ${JSON.stringify(report)}`);
     win.destroy();
     clearTimeout(timeout);
     console.log("Standalone 3D acceptance passed.");

@@ -1,6 +1,6 @@
 /**
  * @module PackageProfile
- * @description Names spatial3d-v1 gaps in a packaged level: custom fonts, glTF requirements, and features the player leaves unchanged.
+ * @description Names spatial3d-v1 gaps in a packaged level: custom fonts, glTF requirements, and features the player still leaves unchanged.
  */
 import type { ReadonlyDocument } from "../core/document/Document";
 import { fontFileError, parseFontFile } from "../core/import/FontFile";
@@ -99,9 +99,11 @@ export function inspectModelProfile(source: string, json: unknown): PackageDiagn
 
 export function inspectDocumentProfile(doc: ReadonlyDocument, packagedFamilies: ReadonlySet<string>): PackageDiagnostic[] {
     const diagnostics: PackageDiagnostic[] = [];
-    const textIds: string[] = [];
     for (const node of doc.nodes.values()) {
-        if (node.type === "core.text" && typeof node.text === "string" && node.text.trim()) textIds.push(node.id);
+        if (node.type === "core.text" && typeof node.text === "string" && node.text.trim() && node.spatial3d) {
+            diagnostics.push({ code: "spatial-text", severity: "warning", feature: "projected-text", subject: node.id,
+                detail: `spatial3d-v1 draws screen-space text only; ${node.id} has a 3D transform and is not projected.` });
+        }
         if (typeof node.style?.fontFamily === "string") {
             for (const name of fontStackFamilies(node.style.fontFamily)) {
                 if (isGenericFontFamily(name)) continue;
@@ -111,16 +113,6 @@ export function inspectDocumentProfile(doc: ReadonlyDocument, packagedFamilies: 
                 }
             }
         }
-        for (const rule of node.entity?.rules ?? []) {
-            if (rule.action.kind === "sound") {
-                diagnostics.push({ code: "sound-cue", severity: "warning", feature: "embedded-sound", subject: node.id,
-                    detail: `embedded sound on ${node.id} is not played by spatial3d-v1.` });
-            }
-        }
-    }
-    if (textIds.length) {
-        diagnostics.push({ code: "undrawn-text", severity: "warning", feature: "text-overlay", subject: textIds[0],
-            detail: `spatial3d-v1 does not draw 2D text into the 3D view (${textIds.slice(0, 8).join(", ")}).` });
     }
     return diagnostics;
 }

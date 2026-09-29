@@ -2,8 +2,17 @@
 /** @module PlayerHost3D.test @description Browser player controls, key state, failure latching and disposal. */
 import { mountPlayer3D, playerInput3D } from "./PlayerHost3D";
 import { PlayerSession3D } from "../runtime/PlayerSession3D";
+import { RuntimeAudio } from "../runtime/RuntimeAudio";
 import { disposeWebGL3D, emitWebGL3D } from "../renderer/emitWebGL3D";
+import { createEmptyDocument } from "../core/document/Document";
+import type { Node } from "../core/document/Node";
+import { world3DFrom } from "../core/runtime/World3D";
 jest.mock("../renderer/emitWebGL3D", () => ({ emitWebGL3D: jest.fn(() => true), disposeWebGL3D: jest.fn(), lastWebGL3DFailure: () => "GPU unavailable" }));
+jest.mock("../runtime/RuntimeAudio", () => ({
+    RuntimeAudio: jest.fn().mockImplementation(() => ({
+        unlock: jest.fn(async () => true), play: jest.fn(async () => true), stop: jest.fn(), dispose: jest.fn()
+    }))
+}));
 let session: any, tick: FrameRequestCallback, dispose: () => void;
 beforeEach(() => {
     localStorage.clear();
@@ -13,7 +22,8 @@ beforeEach(() => {
     session = { status: "running", filePath: "entry", error: null, world: { outcome: "running" },
         advance: jest.fn(), frame: jest.fn(() => ({})), start: jest.fn(async () => true), restart: jest.fn(async () => true),
         pause: jest.fn(() => { session.status = "paused"; }), resume: jest.fn(() => { session.status = "running"; }),
-        stop: jest.fn(() => { session.status = "stopped"; }), followTransition: jest.fn(async () => true) };
+        stop: jest.fn(() => { session.status = "stopped"; }), followTransition: jest.fn(async () => true),
+        takeSounds: jest.fn(() => []), document: null };
     dispose = mountPlayer3D(session as PlayerSession3D);
 });
 afterEach(() => dispose());
@@ -88,4 +98,32 @@ test("late storage reads cannot restore after Stop, and write failures are visib
     expect(session.restoreProgress).not.toHaveBeenCalled();
     click("save-progress");await Promise.resolve();await Promise.resolve();
     expect(document.getElementById("progress-note")!.textContent).toContain("disk full");
+});
+test("embedded cues are played and screen-space text is marked on the overlay", async () => {
+    dispose();
+    document.body.insertAdjacentHTML("beforeend", '<p id="audio"></p><canvas id="text"></canvas>');
+    const scene = document.getElementById("scene")!;
+    Object.defineProperty(scene, "clientWidth", { configurable: true, value: 400 });
+    Object.defineProperty(scene, "clientHeight", { configurable: true, value: 300 });
+    const doc = createEmptyDocument();
+    const label: Node = { id: "label", type: "core.text", parent: null, children: [],
+        geometry: { x: 8, y: 8, width: 80, height: 40 },
+        style: { fill: "#ffffff", opacity: 1, fontFamily: "\"Owned Face\", sans-serif", fontSize: 32 },
+        layout: {}, text: "A" };
+    doc.nodes.set(label.id, label); doc.rootNodeUuids = [label.id];
+    const cue = { source: "data:audio/wav;base64,AAAA", volume: 0.4 };
+    session.takeSounds.mockReturnValue([cue]);
+    session.document = doc; session.world = world3DFrom(doc);
+    dispose = mountPlayer3D(session as PlayerSession3D);
+    (document.getElementById("text") as HTMLCanvasElement).getContext = (() => null) as HTMLCanvasElement["getContext"];
+    tick(16);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    const results = (RuntimeAudio as unknown as jest.Mock).mock.results;
+    const audio = results[results.length - 1]!.value;
+    expect(audio.play).toHaveBeenCalledWith(cue);
+    expect(document.getElementById("audio")!.dataset.played).toBe("1");
+    const overlay = document.getElementById("text")!;
+    expect(overlay.dataset.presented).toBe("true");
+    expect(overlay.dataset.text).toBe("A");
+    expect(overlay.dataset.font).toContain("Owned Face");
 });

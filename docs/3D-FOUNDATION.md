@@ -1,8 +1,9 @@
 # 3D Foundation — adoption plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
-<!-- re-read 2026-09-28: runtime now stores named keyboard bindings for play. Meshes, lighting,
-     collision and import behavior are unchanged. -->
+<!-- re-read 2026-09-28: runtime now stores named keyboard bindings for play. The packaged 3D
+     player plays embedded sound cues and draws screen-space text. Meshes, lighting, collision
+     and import behavior are unchanged. Clean-machine EXE certification remains open. -->
 
 ## Decision
 
@@ -141,8 +142,9 @@ physics backend, dynamic-body impulses and production character control remain l
 
 Read-only level and asset hydration now lives in `src/runtime`, independent of editor Actions,
 with compatibility exports preserving existing editor callers. The subsequent standalone-player
-work adds a bounded package export, event/render host and unsigned Windows unpacked executable;
-clean-machine acceptance remains open. See [Shared player runtime](PLAYER-RUNTIME.md) and
+work adds a bounded package export, event/render host, unsigned Windows unpacked executable,
+embedded sound cues and screen-space text over the 3D view. Separate clean-machine EXE certification
+remains open. See [Shared player runtime](PLAYER-RUNTIME.md) and
 [Standalone player](STANDALONE-PLAYER.md).
 
 ### 3D-4 — production renderer

@@ -2,8 +2,10 @@
 
 <!-- describes: src/core/document, src/core/runtime, src/core/export, src/core/script, src/runtime, src/renderer, src/app/RuntimeAudio.ts, package.json -->
 <!-- re-read 2026-09-28: named-input Controls panels persist version-1 keyboard bindings for editor
-     Play and both players. ENG-06 gamepad, touch and runtime-UI acceptance remain open.
-     package.json records benchmark:authoring, benchmark:gpu and test:benchmark-budgets. ENG-16 benchmarks remain informational. -->
+     Play and both players. spatial3d-v1 now plays embedded cues and draws screen-space text in the
+     packaged player. ENG-06 gamepad, touch and runtime-UI acceptance remain open. Clean-machine EXE
+     certification, streaming and the F1 gate remain open. package.json records benchmark:authoring,
+     benchmark:gpu and test:benchmark-budgets. ENG-16 benchmarks remain informational. -->
 
 Planning assessment: 2026-09-07. Baseline inspected: commit `dac1ef9` plus the current
 uncommitted production-work and Windows Save As fixes; app 0.0.5, schema 78.
@@ -89,7 +91,7 @@ The former Morphic engine remains a preserved reference, not a second production
 | Imported glTF TRS and morph animation, CPU skinning, 16-joint GPU skinning and two-pose blending | Not full animation graphs, events, root motion or character production tools |
 | 2D/3D gameplay rules, interactions, bounded spawning, checkpoints and current-level progress | Not a general behavior lifecycle, full prefab system, production physics or multiplayer |
 | Dependency-aware Save As, recovery checkpoints, browser restore, desktop crash/relaunch, and dependency-folder rollback | Power-loss durability is not guaranteed. A killed copy is repaired from its journal on the next cross-folder Save As |
-| Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Clean-profile acceptance, custom fonts and unsigned provenance; separate Windows clean-machine certification and broader runtime coverage remain open |
+| Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Clean-profile acceptance, custom fonts, unsigned provenance, embedded cues and screen-space text; separate Windows clean-machine certification and broader runtime coverage remain open |
 | Tests, Electron smokes and CPU/GPU benchmarks | Hardware-specific, bounded fixtures; not a broad compatibility or scalability certification |
 
 Evidence starting points:

@@ -40,8 +40,8 @@
       "area": "distribution",
       "priority": "P1",
       "status": "open",
-      "summary": "Delivered clean-profile standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics and unsigned release provenance. The acceptance smoke removes the source and font directories, then checks WebGL presentation, packaged font registration, visible sound/text diagnostics and a path-free provenance record. spatial3d-v1 still does not play embedded sound or draw 2D text into the 3D view. Windows clean-machine EXE certification, signatures, streaming and broader runtime coverage remain open.",
-      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/PackageProfile.ts", "src/runtime/GamePackage.ts", "src/electron/GamePackageExport.ts", "src/player3d/packageFonts.ts", "scripts/package-game.js", "scripts/smoke-player.js", "scripts/smoke-player-acceptance.js", "scripts/smoke-player-startup.js", "package.json"]
+      "summary": "Delivered clean-profile standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics, unsigned release provenance, embedded sound playback and screen-space 2D text in the packaged 3D view. The acceptance smoke removes the source and font directories, then checks WebGL presentation, packaged font registration, drawn overlay text, a played embedded cue and a path-free provenance record. Windows clean-machine EXE certification, signatures, streaming and broader runtime coverage remain open.",
+      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/PackageProfile.ts", "src/runtime/RuntimeAudio.ts", "src/runtime/GamePackage.ts", "src/core/runtime/Gameplay3D.ts", "src/electron/GamePackageExport.ts", "src/player3d/packageFonts.ts", "src/player3d/textOverlay.ts", "src/player3d/PlayerHost3D.ts", "scripts/package-game.js", "scripts/smoke-player.js", "scripts/smoke-player-acceptance.js", "scripts/smoke-player-startup.js", "package.json"]
     },
     {
       "id": "PHYSICS-001",

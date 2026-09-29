@@ -1,4 +1,4 @@
-/** @module Gameplay3D @description Transient 3D authored commands, bounded template instances, interaction and checkpoint respawn. */
+/** @module Gameplay3D @description Transient 3D authored commands, bounded template instances, interaction, checkpoint respawn and embedded sound cues. */
 import type { ReadonlyDocument } from "../document/Document";
 import type { Node } from "../document/Node";
 import type { GameplayRule } from "../document/Gameplay";
@@ -12,6 +12,8 @@ import { behaviorEvents } from "../document/BehaviorGraph";
 export interface Spawn3D { id: string; templateId: string; position: Position }
 export interface Checkpoint { playerId: string; position: Position }
 export const MAX_GAMEPLAY_SPAWNS = 256;
+/** Cues retained from one rules pass. The host plays them; the next step does not. */
+export const MAX_RULE_SOUNDS = 32;
 
 export function materializeGameplay3D(doc: ReadonlyDocument, world: World3DState): ReadonlyDocument {
     if (!world.spawns?.length && !world.despawned?.size) return doc;
@@ -32,6 +34,7 @@ export function applyRules3D(doc: ReadonlyDocument, initial: World3DState,
     events: readonly { self: string; other: string | null; event: GameplayRule["event"]; rules?:readonly GameplayRule[];allowRemoved?:boolean }[], commandsOnly=false,lifecycle=false): World3DState {
     const controlled = playerEntityId(doc.nodes.values()); let world = initial;
     const live = materializeGameplay3D(doc, initial), diagnostics = [...(initial.diagnostics ?? [])];
+    const sounds: { source: string; volume: number }[] = [...(initial.sounds ?? [])];
     for (const event of events.slice(0, 4096)) {
         if (world.despawned?.has(event.self)&&!event.allowRemoved) continue;
         const entity = live.nodes.get(event.self)?.entity;
@@ -73,10 +76,14 @@ export function applyRules3D(doc: ReadonlyDocument, initial: World3DState,
                 for (const child of removed) { bodies.delete(child); despawned.add(child); } world = { ...world, bodies, despawned };
             } else if (action.kind === "velocity" && id && target) {
                 const bodies = new Map(world.bodies); bodies.set(id, { ...target, velocity: { x: action.x, y: action.y, z: target.velocity.z } }); world = { ...world, bodies };
-            } else if (action.kind === "sound") diagnostics.push("3D sound rules are not supported by this player yet.");
+            } else if (action.kind === "sound") {
+                if (sounds.length < MAX_RULE_SOUNDS) sounds.push({ source: action.source, volume: action.volume });
+            }
         }
     }
     world = diagnostics.length ? { ...world, diagnostics: diagnostics.slice(0, 64) } : world;
+    if (sounds.length) world = { ...world, sounds: sounds.slice(0, MAX_RULE_SOUNDS) };
+    else if (world.sounds) { const cleared = { ...world }; delete cleared.sounds; world = cleared; }
     return commandsOnly ? world : advanceBehaviors3D(doc,world,events.map(e=>({owner:e.self,other:e.other,event:e.event})),undefined,lifecycle);
 }
 

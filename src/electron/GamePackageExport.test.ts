@@ -130,7 +130,7 @@ test("custom fonts are packaged from a directory or payload and provenance omits
     expect(manifest.files.some((file: { kind: string }) => file.kind === "font")).toBe(true);
     expect(serialized).not.toContain("Unused Face"); expect(serialized).not.toContain(temp);
     expect(reader.fonts[0].family).toBe("Owned Face");
-    expect(reader.warnings.map(warning => warning.code).sort()).toEqual(["sound-cue", "undrawn-text"]);
+    expect(reader.warnings.map(warning => warning.code)).toEqual([]);
     const provenance = gameProvenance(serialized, { appVersion: "0.0.5", sourceRevision: null });
     expect(provenance.authenticity).toBe("unsigned");
     expect(provenance.manifestSha256).toBe(createHash("sha256").update(serialized).digest("hex"));

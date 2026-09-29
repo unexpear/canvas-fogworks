@@ -156,5 +156,6 @@ and Open–Edit–Save/level/authoring smokes; see GAME-PACKAGE.md for limits an
 The [standalone follow-up](STANDALONE-PLAYER.md) now adds package writing/export, Q04's actual
 event/render host, a payload checksum and Q05's unsigned Windows unpacked build. The standalone
 host has no editor authority; the editor gains a separate export endpoint. No new dependencies
-or native backend were introduced. Clean-profile acceptance of the packaged player is now covered by
-`smoke:player-acceptance`; a separate Windows clean-machine EXE certification and the complete F1 gate remain open.
+or native backend were introduced. The packaged player now plays embedded sound cues and draws
+screen-space 2D text over the 3D view. Clean-profile acceptance is `smoke:player-acceptance`.
+A separate Windows clean-machine EXE certification, streaming and the complete F1 gate remain open.

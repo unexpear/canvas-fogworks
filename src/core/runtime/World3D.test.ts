@@ -2,7 +2,7 @@
 
 import { createEmptyDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { advanceWorld3D, applyWorld3D, digestWorld3D, queryCollisions3D, respawnRun3D, restartRun3D } from "./World3D";
+import { advanceWorld3D, applyWorld3D, digestWorld3D, queryCollisions3D, respawnRun3D, restartRun3D, takeWorldSounds } from "./World3D";
 
 function node(id: string, x: number, dynamic = false): Node {
     return { id, type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 },
@@ -62,5 +62,19 @@ describe("3D runtime world", () => {
             new Map([["hero", { x: 1, y: 0, z: 0, speed: 6 }]]));
         expect(followed.bodies.get("camera")!.transform.position.x).toBeCloseTo(5.1);
         expect(moved.bodies.get("hero")!.transform.position.x).toBe(0);
+    });
+
+    test("an embedded start cue is emitted once and then leaves the world", () => {
+        const doc = createEmptyDocument(), hero = node("hero", 0, true);
+        const source = "data:audio/wav;base64,AAAA";
+        hero.entity = { body: "dynamic", player: true, rules: [{ event: "start", other: "any", target: "self",
+            action: { kind: "sound", source, volume: 0.4 } }] };
+        doc.nodes.set(hero.id, hero); doc.rootNodeUuids = [hero.id];
+        const first = advanceWorld3D(doc, restartRun3D(doc), 1 / 60);
+        expect(first.sounds).toEqual([{ source, volume: 0.4 }]);
+        expect(first.diagnostics ?? []).not.toEqual(expect.arrayContaining([expect.stringMatching(/sound/)]));
+        const taken = takeWorldSounds(first);
+        expect(taken.world.sounds).toBeUndefined();
+        expect(advanceWorld3D(doc, taken.world, 1 / 60).sounds).toBeUndefined();
     });
 });

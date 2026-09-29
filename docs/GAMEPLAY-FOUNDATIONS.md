@@ -119,7 +119,8 @@ build and file-workflow/level/authoring/player smokes pass. A new unsigned Windo
 owned demo at `release/gameplay-foundation-20260912/desktop/win-unpacked/` also passes the
 actual executable startup smoke. These are host-machine results, not clean-machine certification.
 
-Still open in Q06/F2: full prefab instances, cross-build save migrations,
-richer character/physics semantics, 3D audio, portable/browser save UX and full process-crash/relaunch
-acceptance. Visited-level campaign saves do not by themselves prove a writer crash or a fresh process.
+Embedded 3D sound cues now play through the same bounded Web Audio path as 2D. Streaming, buses and
+reusable audio assets remain [AUDIO-001](BACKLOG.json). Still open in Q06/F2: full prefab instances,
+cross-build save migrations, richer character/physics semantics, portable/browser save UX and full
+process-crash/relaunch acceptance. Visited-level campaign saves do not by themselves prove a writer crash or a fresh process.
 F1 clean-machine certification is also still open. Existing installers/assets are retained.

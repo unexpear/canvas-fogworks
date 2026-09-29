@@ -105,7 +105,7 @@ limits still apply during hydration and frame construction.
 Ordinary scene image `src` fields, including nested node/tileset fields, must already contain
 embedded PNG/JPEG/WebP/GIF base64. Relative/network images are not silently fetched. `userData`
 is treated as metadata, not a dependency instruction. Image embedding remains the writer's job.
-Custom font families used by packaged text are embedded as `font` files when the exporter is given a font directory or the editor's registered faces. Generic CSS families need no file. A missing, conflicting or unused face fails the package by name. SVG image payloads and unsupported required glTF extensions also fail by name. Embedded sound cues, morph targets, non-triangle primitives and 2D text that the 3D view does not draw are warnings on the reader, not silent omissions.
+Custom font families used by packaged text are embedded as `font` files when the exporter is given a font directory or the editor's registered faces. Generic CSS families need no file. A missing, conflicting or unused face fails the package by name. SVG image payloads and unsupported required glTF extensions also fail by name. Embedded sound cues play in the packaged player. Screen-space 2D text is drawn over the 3D view. Morph targets, non-triangle primitives and text that carries a 3D transform (it is not projected as glyphs) remain warnings on the reader, not silent omissions.
 
 The `spatial3d-v1` marker identifies this bounded reader/player profile. It is not a claim of
 full glTF support, complete game-rule/audio support, render parity on every GPU or general engine
@@ -161,8 +161,9 @@ or clean-machine standalone-game certification was performed.
 Follow-up delivery: the explicit package writer/export path, dedicated event/render host and
 unsigned executable packaging are implemented; see [Standalone player](STANDALONE-PLAYER.md).
 `npm run smoke:player-acceptance` is the clean-profile gate: it deletes the source project and font
-directory before launching the packaged HTML. Windows EXE certification on a separate machine,
-signatures and broader runtime coverage remain open. Do not mark F1 complete on this smoke alone.
+directory before launching the packaged HTML, then checks WebGL, the packaged face, drawn overlay
+text and one played embedded cue. Windows EXE certification on a separate machine,
+signatures, streaming and broader runtime coverage remain open. Do not mark F1 complete on this smoke alone.
 
 Encoding behavior was checked against [TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder/encode)
 and [base64 byte conversion](https://developer.mozilla.org/en-US/docs/Web/API/Window/btoa).

@@ -47,6 +47,23 @@ function deferred<T>() {
 const right = { x: 1, y: 0, z: 0, speed: 6 };
 function reachGoal(session: PlayerSession3D) { session.advance(0); session.advance(1000 / 60, right); }
 
+test("a packaged start cue is delivered once and is not kept on the world", async () => {
+    const doc = level();
+    const source = "data:audio/wav;base64,AAAA";
+    const hero = doc.nodes.get("hero")!;
+    hero.entity = { ...hero.entity!, rules: [{ event: "start", other: "any", target: "self", action: { kind: "sound", source, volume: 0.4 } }] };
+    const api = host();
+    api.readEntryFile.mockImplementation(async () => ({ filePath: "package:entry", content: serializeDocument(doc) }));
+    const session = new PlayerSession3D(api, "main-game");
+    await session.start();
+    session.advance(0); session.advance(1000 / 60);
+    expect(session.takeSounds()).toEqual([{ source, volume: 0.4 }]);
+    expect(session.world!.sounds).toBeUndefined();
+    expect(session.world!.diagnostics ?? []).not.toEqual(expect.arrayContaining([expect.stringMatching(/sound/)]));
+    session.advance(2000 / 60);
+    expect(session.takeSounds()).toEqual([]);
+});
+
 test("entry loads directly and creates a renderable fresh world without an editor save path", async () => {
     const api = host(), session = new PlayerSession3D(api, "main-game");
     expect(session.status).toBe("stopped"); expect(session.frame(400, 300)).toBeNull();

@@ -143,7 +143,7 @@ import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
 import { restartRun, respawnRun } from "../core/runtime/RunFlow";
 import { EDITOR_CAMPAIGN_GAME_ID, emptyCampaign, openCampaignLevel, rememberLeavingLevel } from "../runtime/CampaignProgress";
-import { advanceWorld3D, applyWorld3D, respawnRun3D, restartRun3D, World3DState } from "../core/runtime/World3D";
+import { advanceWorld3D, applyWorld3D, respawnRun3D, restartRun3D, takeWorldSounds, World3DState } from "../core/runtime/World3D";
 import { Entity, playerEntityId } from "../core/document/Entity";
 import { RuntimeProject } from "./LevelTransitionWorkflow";
 import { followCamera } from "../core/runtime/Camera";
@@ -1288,7 +1288,11 @@ export function App() {
                     if (inputActionsRef.current!.pressed("interact")) {
                         const runtimeDoc = runtimeProjectRef.current.document ?? dispatcher.getDocument();
                         const player = playerEntityId(runtimeDoc.nodes.values());
-                        if (world3dRef.current && workspaceRef.current.id === "3d" && player) world3dRef.current = interact3D(runtimeDoc, world3dRef.current, player);
+                        if (world3dRef.current && workspaceRef.current.id === "3d" && player) {
+                            const taken = takeWorldSounds(interact3D(runtimeDoc, world3dRef.current, player));
+                            for (const sound of taken.sounds) void audioRef.current?.play(sound);
+                            world3dRef.current = taken.world;
+                        }
                         else if (es.world) { const result = interactGameplay2D(runtimeDoc, es.world, player); es.world = result.world; result.sounds.forEach(sound => { void audioRef.current?.play(sound); }); }
                         refresh();
                     }
@@ -1443,8 +1447,10 @@ export function App() {
             if (es.playing && workspace === "3d" && world3dRef.current) {
                 const now3d = Date.now(), last3d = world3dLastAtRef.current ?? now3d;
                 const inputs3d = es.controlled ? new Map([[es.controlled, spatialInput(inputActionsRef.current!)]]) : new Map();
-                world3dRef.current = advanceWorld3D(base, world3dRef.current,
-                    (now3d - last3d) / 1000, inputs3d);
+                const stepped3d = takeWorldSounds(advanceWorld3D(base, world3dRef.current,
+                    (now3d - last3d) / 1000, inputs3d));
+                for (const sound of stepped3d.sounds) void audioRef.current?.play(sound);
+                world3dRef.current = stepped3d.world;
                 world3dLastAtRef.current = now3d;
                 if (world3dRef.current.diagnostics?.length) setFileStatus(world3dRef.current.diagnostics[0]);
                 if (world3dRef.current.transitionTo && es.world) {
@@ -4924,7 +4930,7 @@ export function App() {
                 const runtimeDoc=runtimeProjectRef.current.document??dispatcher.getDocument();
                 return world && <BehaviorDebugPanel doc={runtimeDoc} state={world.behaviorState} time={world.time} tallies={world.tallies??new Map()}
                     onChange={behaviorState=>{if(workspace==="3d"&&world3dRef.current)world3dRef.current={...world3dRef.current,behaviorState};else if(es.world)es.world={...es.world,behaviorState};refresh();}}
-                    onStep={()=>{if(workspace==="3d"&&world3dRef.current)world3dRef.current=advanceBehaviors3D(runtimeDoc,world3dRef.current,[],"step");else if(es.world)es.world=advanceBehaviors2D(runtimeDoc,es.world,es.controlled,[],"step").world;refresh();}}/>;
+                    onStep={()=>{if(workspace==="3d"&&world3dRef.current){const taken=takeWorldSounds(advanceBehaviors3D(runtimeDoc,world3dRef.current,[],"step"));for(const sound of taken.sounds)void audioRef.current?.play(sound);world3dRef.current=taken.world;}else if(es.world)es.world=advanceBehaviors2D(runtimeDoc,es.world,es.controlled,[],"step").world;refresh();}}/>;
             })()}
             <div style={{ padding: "3px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`, fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
                 <span>{toolName.charAt(0).toUpperCase() + toolName.slice(1)} tool</span>

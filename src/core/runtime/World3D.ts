@@ -9,7 +9,7 @@ import { dropHidden } from "../document/Components";
 import { Collider3D, Transform3D, Vec3 } from "../document/Spatial3D";
 import { animateWorld3D } from "./AnimationWorld";
 import { bodyContact3D,bodyGeometry3D,localDisplacement3D,worldDisplacement3D,parentMinimumScale3D } from "./BodyContact3D";
-import { materializeGameplay3D, stepRules3D, respawnCheckpoint3D } from "./Gameplay3D";
+import { materializeGameplay3D, stepRules3D, respawnCheckpoint3D, MAX_RULE_SOUNDS } from "./Gameplay3D";
 
 export const FIXED_STEP_3D = 1 / 60;
 export const MAX_STEPS_PER_FRAME_3D = 5;
@@ -32,6 +32,8 @@ export interface World3DState {
     checkpoint?: import("./Gameplay3D").Checkpoint;
     gameplayContacts?: readonly [string, string][];
     diagnostics?: readonly string[];
+    /** Embedded cues produced by the pass that returned this world. Take them before the next advance. */
+    sounds?: readonly { source: string; volume: number }[];
     animations?: import("./AnimationPlayback").AnimationPlayers;
     motionFades?: import("./AnimationPlayback").MotionFades;
     bodies: ReadonlyMap<string, Body3D>;
@@ -182,8 +184,18 @@ export function stepWorld3D(doc: ReadonlyDocument, world: World3DState,
             }
         }
     }
-    const next = stepRules3D(authored, world, { ...world, bodies, time: world.time + FIXED_STEP_3D, outcome, transitionTo, diagnostics });
+    const carried: World3DState = { ...world, bodies, time: world.time + FIXED_STEP_3D, outcome, transitionTo, diagnostics };
+    delete carried.sounds;
+    const next = stepRules3D(authored, world, carried);
     return animateWorld3D(materializeGameplay3D(authored, next), next);
+}
+
+/** Splits this pass's cues off the world so a later step cannot play them again. */
+export function takeWorldSounds(world: World3DState): { world: World3DState; sounds: readonly { source: string; volume: number }[] } {
+    if (!world.sounds?.length) return { world, sounds: [] };
+    const sounds = world.sounds, next = { ...world };
+    delete next.sounds;
+    return { world: next, sounds };
 }
 
 /** Runs a bounded fixed-step accumulator, preventing a stalled frame from spiralling. */
@@ -192,10 +204,16 @@ export function advanceWorld3D(doc: ReadonlyDocument, world: World3DState, elaps
     let accumulator = Math.min(MAX_STEPS_PER_FRAME_3D * FIXED_STEP_3D,
         world.accumulator + Math.max(0, elapsedSeconds));
     let next = world, count = 0;
+    const sounds: { source: string; volume: number }[] = [];
     while (accumulator + 1e-12 >= FIXED_STEP_3D && count++ < MAX_STEPS_PER_FRAME_3D) {
         next = stepWorld3D(doc, next, inputs); accumulator -= FIXED_STEP_3D;
+        for (const sound of next.sounds ?? []) if (sounds.length < MAX_RULE_SOUNDS) sounds.push(sound);
     }
-    return { ...next, accumulator: Math.max(0, accumulator) };
+    const carried = { ...next };
+    delete carried.sounds;
+    return sounds.length
+        ? { ...carried, accumulator: Math.max(0, accumulator), sounds }
+        : { ...carried, accumulator: Math.max(0, accumulator) };
 }
 
 export function restartRun3D(doc: ReadonlyDocument): World3DState { return world3DFrom(doc); }
