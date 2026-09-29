@@ -35,7 +35,6 @@ import { Gradient, GradientStop } from "../core/document/Gradient";
 import { resolveTypography } from "../renderer/RenderModel";
 import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
 import { Serializer, serializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
-import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState, contentBounds, selectionBounds, hitTest } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
 import { ContentPatch, UpdateNodeContentAction } from "../core/actions/UpdateNodeContentAction";
@@ -48,9 +47,6 @@ import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions
 import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
 import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
 import { tileImportActions, TilePlacement } from "../core/actions/tileImport";
-import { resolveLayerDrop, DropPosition } from "../editor/layerDrop";
-import { selectionForRowClick, ClickModifiers } from "../editor/layerSelection";
-import { filterLayers } from "../editor/layerFilter";
 import { ReparentNodeAction } from "../core/actions/ReparentNodeAction";
 import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
@@ -172,6 +168,8 @@ import { dollyCamera3D, orbitCamera3D, panCamera3D } from "../renderer/CameraOrb
 import { RuntimeControls, Workspace, WorkspaceControls, WORKSPACES } from "./AppShellControls";
 import { FoldersDrawer, AsepritePlacementInput } from "./FoldersDrawer";
 import { ThreeDInspector } from "./ThreeDInspector";
+import { DocumentControls } from "./DocumentControls";
+import { layerNodeLabel, LayersPanel, nodeTypeLabel } from "./LayersPanel";
 import {BlockoutShape} from "../core/geometry/Blockout3D";
 
 export { SEQUENCE_IMPORT_MAX } from "./FoldersDrawer";
@@ -528,9 +526,6 @@ export function App() {
     const symmetryRef = useRef<SymmetryMode>(NO_SYMMETRY);
     symmetryRef.current = symmetry;
 
-    // Which folders are collapsed in the layer tree. Purely a VIEW concern — it never touches
-    // the document, so collapsing is not undoable and not persisted.
-    const [collapsedLayers, setCollapsedLayers] = useState<Set<string>>(new Set());
     const [backend, setBackend] = useState<RenderBackend>("svg");
     /**
      * Why the GPU backend is drawing through Canvas, when it is.
@@ -567,14 +562,6 @@ export function App() {
     // an undoable edit and Ctrl+Z after Ctrl+C would "un-copy".
     const clipboardRef = useRef<ClipboardContents | null>(null);
     const [previewClipName, setPreviewClipName] = useState("");
-    // The layer drag in flight: what is being dragged, and where the pointer currently is.
-    // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
-    // show the indicator — a ref would move the data without moving the picture.
-    const [layerDrag, setLayerDrag] = useState<{ id: string; over: string | null; position: DropPosition | null }>({ id: "", over: null, position: null });
-    const [layerQuery, setLayerQuery] = useState("");
-    // The row a shift-click measures from. Panel-local: it is an affordance, not document
-    // state, and it must survive a re-render without causing one.
-    const layerAnchorRef = useRef<string | null>(null);
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
     const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean; truncated: boolean }>({
@@ -2667,16 +2654,6 @@ export function App() {
                 ? (es.isDragging ? "grabbing" : "grab")
                 : "default");
 
-    // One friendly label per NODE_TYPES entry (the `|| n.type` fallback keeps this graceful).
-    const nodeTypeLabels: Record<string, string> = {
-        "core.rectangle": "Rectangle",
-        "core.text": "Text",
-        "core.image": "Image",
-        "core.ellipse": "Ellipse",
-        "core.line": "Line",
-        "core.path": "Path"
-    };
-
     const toggleRuntime = () => {
         runtimeProjectRef.current.reset();
         campaignRef.current = emptyCampaign();
@@ -2876,47 +2853,19 @@ export function App() {
                     for no reason they can name and sat at the same weight as Save.
                     Theme, Timeline and Light stay because they are FEATURES, not debugging. They
                     are in the View menu as well, which is where a newcomer looks first. */}
-                <button
-                    title="Switch the document's theme mode — $token colors re-resolve against the variable store (undoable, persisted)"
-                    onClick={() => {
+                <DocumentControls
+                    document={dispatcher.getDocument()}
+                    playing={es.playing}
+                    onToggleTheme={() => {
                         const doc = dispatcher.getDocument();
                         dispatcher.dispatchAction(new SetActiveThemeAction(doc, doc.activeTheme === "light" ? "dark" : "light"));
                         refresh();
                     }}
-                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >
-                    Theme: {dispatcher.getDocument().activeTheme === "light" ? "Light" : "Dark"}
-                </button>
-                {/* Which STATE the whole document shows (M7) — the same document-level
-                    selection shape as the theme, and placed beside it for that reason.
-                    Only appears once something defines a state; otherwise it would be a
-                    control with exactly one option. */}
-                {(() => {
-                    const d = dispatcher.getDocument();
-                    const names = new Set<string>();
-                    d.nodes.forEach(n => { for (const k of Object.keys(n.states ?? {})) names.add(k); });
-                    if (names.size === 0) return null;
-                    return (
-                        <select
-                            title="Show every node in this named state"
-                            value={d.activeState ?? ""}
-                            onChange={e => {
-                                dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), e.target.value || null));
-                                refresh();
-                            }}
-                            style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: d.activeState ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
-                        >
-                            <option value="">State: base</option>
-                            {[...names].sort().map(n => <option key={n} value={n}>State: {n}</option>)}
-                        </select>
-                    );
-                })()}
-                                                                                {/* A document has no clock until somebody asks for one, so a still drawing carries
-                    no timeline strip and serialises exactly as it did before animation existed. */}
-                <button
-                    title={dispatcher.getDocument().clips?.length ? "Remove named clips before removing their timeline" : "Give this document a timeline (24 frames at 12fps), or take it away again"}
-                    disabled={es.playing || !!dispatcher.getDocument().clips?.length}
-                    onClick={() => {
+                    onSetActiveState={state => {
+                        dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), state));
+                        refresh();
+                    }}
+                    onToggleTimeline={() => {
                         const d = dispatcher.getDocument();
                         if (es.playing || d.clips?.length) return;
                         const removing = !!d.timeline;
@@ -2926,15 +2875,7 @@ export function App() {
                         es.frame = removing ? undefined : 0;
                         refresh();
                     }}
-                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent",
-                             color: dispatcher.getDocument().timeline ? UI.accent : "#ccc",
-                             border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >⏱ Timeline</button>
-                                {/* A document is unlit until somebody asks, and an unlit one draws byte-for-byte
-                    as it did before lighting existed — ambient 1, no lights, colours times one. */}
-                <button
-                    title="Light the scene from the top-left, or turn the lights off again. Raise a mesh control point's HEIGHT to give a shape something to shade."
-                    onClick={() => {
+                    onToggleLighting={() => {
                         const d = dispatcher.getDocument();
                         const on = d.lights !== undefined;
                         dispatcher.dispatchAction(new SetLightingAction(d,
@@ -2942,89 +2883,23 @@ export function App() {
                             on ? undefined : 0.35));
                         refresh();
                     }}
-                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent",
-                             color: dispatcher.getDocument().lights ? UI.accent : "#ccc",
-                             border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >☀ Light</button>
-                {/* THE DOCUMENT'S BACKGROUND (schema 70), and a real colour input rather than a
-                    toggle: the field is a colour, so the control that sets it should be one. A
-                    document with no sky shows the swatch at the editor's own backdrop and the
-                    CLEAR button is what puts it back to absent — absent and "the same colour the
-                    editor happens to use" are different documents, and only one of them exports. */}
-                <input
-                    type="color"
-                    data-doc-background="1"
-                    title="What the document sits on. Exported, drawn by all three backends, and read from a Tiled map's backgroundcolor."
-                    value={dispatcher.getDocument().background ?? "#1a1a2e"}
-                    onChange={e => {
-                        dispatcher.dispatchAction(
-                            new SetBackgroundAction(dispatcher.getDocument(), e.target.value));
+                    onSetBackground={color => {
+                        dispatcher.dispatchAction(new SetBackgroundAction(dispatcher.getDocument(), color));
                         refresh();
                     }}
-                    style={{ width: 26, height: 20, marginLeft: 4, padding: 0, background: "transparent",
-                             border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer",
-                             verticalAlign: "middle" }}
-                />
-                {dispatcher.getDocument().background !== undefined && (
-                    <button
-                        data-doc-background-clear="1"
-                        title="Remove the background, so the document has none at all again."
-                        onClick={() => {
-                            dispatcher.dispatchAction(
-                                new SetBackgroundAction(dispatcher.getDocument(), undefined));
-                            refresh();
-                        }}
-                        style={{ fontSize: 11, padding: "3px 6px", marginLeft: 2, background: "transparent",
-                                 color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                    >✕</button>
-                )}
-                {/* ONE SCREEN OF THE GAME (schema 72), drawn on the canvas as a translucent
-                    outline. TWO NUMBER FIELDS rather than a picker, because the field is a size.
-                    Absent shows both empty; committing a size on an empty document declares one,
-                    and the CLEAR button puts it back to undeclared — the pre-72 state, which is
-                    a different document from any declared size. */}
-                <span title="One screen of the game: the play area's size, drawn as an outline on the canvas. The camera and death plane will read this in a later slice."
-                      style={{ marginLeft: 8, fontSize: 11, color: "#888" }}>screen</span>
-                <input
-                    type="number" min={1} data-doc-screen="w" placeholder="w"
-                    value={dispatcher.getDocument().screen?.width ?? ""}
-                    onChange={e => {
-                        const w = Number(e.target.value);
+                    onCommitScreen={(axis, value) => {
                         const now = dispatcher.getDocument().screen;
-                        if (!Number.isFinite(w) || w <= 0) return;
                         dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(),
-                            { width: w, height: now?.height ?? w }));
+                            axis === "width"
+                                ? { width: value, height: now?.height ?? value }
+                                : { width: now?.width ?? value, height: value }));
                         refresh();
                     }}
-                    style={{ width: 46, fontSize: 11, marginLeft: 3, padding: "2px 3px", background: "transparent",
-                             color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3 }}
-                />
-                <input
-                    type="number" min={1} data-doc-screen="h" placeholder="h"
-                    value={dispatcher.getDocument().screen?.height ?? ""}
-                    onChange={e => {
-                        const h = Number(e.target.value);
-                        const now = dispatcher.getDocument().screen;
-                        if (!Number.isFinite(h) || h <= 0) return;
-                        dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(),
-                            { width: now?.width ?? h, height: h }));
+                    onClearScreen={() => {
+                        dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(), undefined));
                         refresh();
                     }}
-                    style={{ width: 46, fontSize: 11, marginLeft: 2, padding: "2px 3px", background: "transparent",
-                             color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3 }}
                 />
-                {dispatcher.getDocument().screen !== undefined && (
-                    <button
-                        data-doc-screen-clear="1"
-                        title="Remove the screen declaration, so the document has none again."
-                        onClick={() => {
-                            dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(), undefined));
-                            refresh();
-                        }}
-                        style={{ fontSize: 11, padding: "3px 6px", marginLeft: 2, background: "transparent",
-                                 color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                    >✕</button>
-                )}
                 {startedFromCorruptSave && (
                     <span
                         title={`The previous autosave could not be read and was kept at "${CORRUPT_BACKUP_KEY}". Saving now will replace it.`}
@@ -3394,120 +3269,32 @@ export function App() {
                     })}
                 </div>
                 <div style={{ width: 180, background: UI.panel, borderRight: `1px solid ${UI.line}`, overflow: "auto", padding: 8 }}>
-                    <div style={PANEL_HEADING}>Layers</div>
-                    <input
-                        type="text"
-                        value={layerQuery}
-                        placeholder="Search layers…"
-                        onChange={e => setLayerQuery(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Escape") setLayerQuery(""); }}
-                        style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px", marginBottom: 6,
-                            background: UI.bg, color: UI.text, border: `1px solid ${layerQuery ? UI.accent : UI.line}`, borderRadius: 2 }}
+                    <LayersPanel
+                        getDocument={() => dispatcher.getDocument()}
+                        selectedIds={es.selectedNodeIds}
+                        onSelect={ids => { es.selectedNodeIds = ids; refresh(); }}
+                        onFlags={(id, flags) => {
+                            dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), id, flags));
+                            refresh();
+                        }}
+                        onReparent={(id, parent, index) => {
+                            dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), id, parent, index));
+                            refresh();
+                        }}
+                        onOpacity={(id, opacity) => {
+                            // Routed, so a copy gets a style override instead of a raw action.
+                            const action = styleActionFor(dispatcher.getDocument(), id, { opacity });
+                            if (action) dispatcher.dispatchAction(action, { coalesce: true });
+                            refresh();
+                        }}
+                        onRename={(id, name) => {
+                            // The same routed content edit the inspector's Name field uses.
+                            const action = contentActionFor(dispatcher.getDocument(), id, { name });
+                            if (action) dispatcher.dispatchAction(action);
+                            refresh();
+                        }}
+                        onRefresh={refresh}
                     />
-                    {(() => {
-                        // Walk the REAL tree: roots, then each node's children, depth-first. The
-                        // panel was a flat list from `traverseSceneGraph`, which had no way to show
-                        // the hierarchy that frames, groups and instances now create.
-                        const doc = dispatcher.getDocument();
-                        const rows: React.ReactNode[] = [];
-                        const labelOf = (id: string) => {
-                            const n = doc.nodes.get(id);
-                            return n ? (n.name || nodeTypeLabels[n.type] || n.type) : id;
-                        };
-                        // The SAME label the row displays, so the filter cannot disagree with
-                        // what the user is reading.
-                        const filter = filterLayers(doc, layerQuery, labelOf);
-                        // The order rows are actually RENDERED in — what a shift-click range
-                        // means. Rows the user cannot see are not between anything.
-                        const visibleOrder: string[] = [];
-                        // Both flags INHERIT, so the walk carries them down rather than each row
-                        // re-deriving them by climbing — the panel then agrees with the engine,
-                        // which computes lock the same way during its own parents-first walk.
-                        const walk = (ids: readonly string[], depth: number, hiddenAbove = false, lockedAbove = false) => {
-                            for (const id of ids) {
-                                const n = doc.nodes.get(id);
-                                if (!n) continue;
-                                if (!filter.inactive && !filter.visible.has(id)) continue;
-                                const hasChildren = n.children.length > 0;
-                                // While filtering, a hit inside a collapsed group must be
-                                // reachable — otherwise search only finds what was already open.
-                                const isCollapsed = filter.inactive ? collapsedLayers.has(id) : false;
-                                visibleOrder.push(id);
-                                rows.push(
-                                    <LayerRow
-                                        key={id}
-                                        node={n}
-                                        depth={depth}
-                                        selected={es.selectedNodeIds.includes(id)}
-                                        collapsed={isCollapsed}
-                                        hasChildren={hasChildren}
-                                        isAutoLayout={n.layout.container !== undefined || n.layout.grid !== undefined}
-                                        inheritedHidden={hiddenAbove}
-                                        inheritedLocked={lockedAbove}
-                                        onFlag={flags => {
-                                            dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), id, flags));
-                                            refresh();
-                                        }}
-                                        dropHint={layerDrag.over === id ? layerDrag.position : null}
-                                        onDragStart={() => setLayerDrag({ id, over: null, position: null })}
-                                        onDragOver={position => {
-                                            // Only show a hint for a drop that would actually be
-                                            // taken — `resolveLayerDrop` decides, so the indicator
-                                            // and the outcome cannot disagree.
-                                            const ok = layerDrag.id && layerDrag.id !== id
-                                                && resolveLayerDrop(dispatcher.getDocument(), layerDrag.id, id, position) !== null;
-                                            setLayerDrag(d => ({ ...d, over: ok ? id : null, position: ok ? position : null }));
-                                        }}
-                                        onDrop={() => {
-                                            const drop = layerDrag.id && layerDrag.position
-                                                ? resolveLayerDrop(dispatcher.getDocument(), layerDrag.id, id, layerDrag.position)
-                                                : null;
-                                            if (drop) {
-                                                dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), layerDrag.id, drop.parent, drop.index));
-                                            }
-                                            setLayerDrag({ id: "", over: null, position: null });
-                                            refresh();
-                                        }}
-                                        onDragEnd={() => setLayerDrag({ id: "", over: null, position: null })}
-                                        onOpacity={opacity => {
-                                            // ROUTED, so a copy gets a style override instead of
-                                            // a raw action at an id the document does not hold.
-                                            const action = styleActionFor(dispatcher.getDocument(), id, { opacity });
-                                            if (action) dispatcher.dispatchAction(action, { coalesce: true });
-                                            refresh();
-                                        }}
-                                        onRename={name => {
-                                            // The SAME routed content edit the inspector's Name
-                                            // field uses, so a copy is refused here too.
-                                            const action = contentActionFor(dispatcher.getDocument(), id, { name });
-                                            if (action) dispatcher.dispatchAction(action);
-                                            refresh();
-                                        }}
-                                        label={n.name || nodeTypeLabels[n.type] || n.type}
-                                        onSelect={mods => {
-                                            const next = selectionForRowClick(visibleOrder, es.selectedNodeIds, layerAnchorRef.current, id, mods);
-                                            es.selectedNodeIds = next.selected;
-                                            layerAnchorRef.current = next.anchor;
-                                            refresh();
-                                        }}
-                                        onToggle={() => {
-                                            const next = new Set(collapsedLayers);
-                                            next.has(id) ? next.delete(id) : next.add(id);
-                                            setCollapsedLayers(next);
-                                        }}
-                                    />
-                                );
-                                // A collapsed folder hides its subtree; the nodes stay selected and
-                                // rendered, this is purely how much of the tree the panel shows.
-                                if (hasChildren && !isCollapsed) walk(n.children, depth + 1, hiddenAbove || !!n.hidden, lockedAbove || !!n.locked);
-                            }
-                        };
-                        walk(doc.rootNodeUuids, 0);
-                        return rows;
-                    })()}
-                    {dispatcher.getDocument().nodes.size === 0 && (
-                        <div style={{ fontSize: 11, color: "#555", padding: "4px 6px" }}>No layers yet</div>
-                    )}
                 </div>
 
                 <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
@@ -3648,13 +3435,13 @@ export function App() {
                     <div style={PANEL_HEADING}>Inspector</div>
                     {node && selectedNodeId ? (
                         <div style={{ fontSize: 11, lineHeight: 1.6 }}>
-                            <div style={{ color: "#666", marginBottom: 6 }}>{nodeTypeLabels[node.type] || node.type} — {selectedNodeId.slice(0, 8)}</div>
+                            <div style={{ color: "#666", marginBottom: 6 }}>{nodeTypeLabel(node.type)} — {selectedNodeId.slice(0, 8)}</div>
 
                             <InspectorSection title="Identity">
                                 <label style={INSPECTOR_LABEL}>Name</label>
                                 <TextInput
                                     value={node.name ?? ""}
-                                    placeholder={nodeTypeLabels[node.type] || node.type}
+                                    placeholder={nodeTypeLabel(node.type)}
                                     onChange={v => { editContent({ name: v }); refresh(); }}
                                 />
                             </InspectorSection>
@@ -3928,10 +3715,7 @@ export function App() {
                                     if (!stored?.mesh) return null;
                                     const siblings = boneChoices(dispatcher.getDocument(), node.id);
                                     if (siblings.length === 0) return null;
-                                    const label = (id: string) => {
-                                        const n = dispatcher.getDocument().nodes.get(id);
-                                        return n ? (n.name || nodeTypeLabels[n.type] || n.type) : id;
-                                    };
+                                    const label = (id: string) => layerNodeLabel(dispatcher.getDocument().nodes.get(id), id);
                                     return (
                                         <div style={{ marginTop: 8 }}>
                                             <label style={INSPECTOR_LABEL}>Weight brush</label>
@@ -4462,10 +4246,7 @@ export function App() {
                                     const full = bones.length >= SKIN_MAX_BONES;
                                     // The LAYERS PANEL'S own label. A binding stores an id, but an
                                     // id is not a thing anyone recognises in a list of siblings.
-                                    const label = (id: string) => {
-                                        const n = dispatcher.getDocument().nodes.get(id);
-                                        return n ? (n.name || nodeTypeLabels[n.type] || n.type) : id;
-                                    };
+                                    const label = (id: string) => layerNodeLabel(dispatcher.getDocument().nodes.get(id), id);
                                     const setMesh = (next: ReadonlyMesh, coalesce = false) => {
                                         if (next === mesh) return;
                                         dispatcher.dispatchAction(
@@ -5763,24 +5544,6 @@ function SelectInput({ value, options, onChange }: { value: string; options: rea
 }
 
 
-/** Glyph per node type — a layer list you can scan by shape rather than by reading every row. */
-const LAYER_ICONS: Record<string, string> = {
-    "core.rectangle": "▭", "core.ellipse": "○", "core.line": "╱", "core.text": "T",
-    "core.image": "▣", "core.path": "◇", "core.instance": "⧉"
-};
-
-/**
- * One row of the layer tree.
- *
- * A row is a FOLDER when it has children. Two kinds exist and they are deliberately the same
- * mechanism: a GROUP is a container with no fill (organisational — it holds things and paints
- * nothing), and a FRAME is one that paints and can lay its children out. Nothing in the
- * document distinguishes them, exactly as a component master is "just a node subtree" — so the
- * tree shows what a node IS (does it paint? does it lay out?) rather than a stored kind.
- */
-
-
-
 /**
  * The TOKENS panel — design tokens (M5) reaching the UI at last.
  *
@@ -6479,133 +6242,6 @@ function TokensPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; re
                     </div>
                 );
             })}
-        </div>
-    );
-}
-
-function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, inheritedHidden, inheritedLocked, onSelect, onToggle, onFlag, label, dropHint, onDragStart, onDragOver, onDrop, onDragEnd, onRename, onOpacity }: {
-    node: ReadonlyNode; depth: number; selected: boolean; collapsed: boolean; hasChildren: boolean;
-    isAutoLayout: boolean;
-    /** True when an ANCESTOR is hidden/locked — both inherit, so the row shows the effect
-     *  without pretending the flag is set on this node. */
-    inheritedHidden: boolean; inheritedLocked: boolean;
-    onSelect: (mods: ClickModifiers) => void; onToggle: () => void; onFlag: (flags: { hidden?: boolean; locked?: boolean }) => void; label: string;
-    /** Drag-to-reorder. `dropHint` is where the pointer currently is within THIS row, so the
-     *  row can draw the line that says what the release will do. */
-    dropHint: DropPosition | null;
-    onDragStart: () => void; onDragOver: (position: DropPosition) => void; onDrop: () => void; onDragEnd: () => void;
-    onRename: (name: string) => void;
-    onOpacity: (opacity: number) => void;
-}) {
-    const [hover, setHover] = useState(false);
-    const [renaming, setRenaming] = useState(false);
-    const isGroup = hasChildren && (node.style.fill === "none" || !node.style.fill);
-    return (
-        <div
-            data-layer-node-id={node.id}
-            draggable={!renaming}
-            onDragStart={e => { e.dataTransfer.effectAllowed = "move"; onDragStart(); }}
-            onDragOver={e => {
-                e.preventDefault();
-                // Top and bottom eighths reorder; the middle reparents INTO the row. A row
-                // that cannot hold children never offers "inside", so the indicator never
-                // promises a drop that would be refused.
-                const r = e.currentTarget.getBoundingClientRect();
-                const t = (e.clientY - r.top) / r.height;
-                onDragOver(t < 0.3 ? "before" : t > 0.7 ? "after" : "inside");
-            }}
-            onDrop={e => { e.preventDefault(); onDrop(); }}
-            onDragEnd={onDragEnd}
-            onClick={e => onSelect({ shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey })}
-            onMouseEnter={() => setHover(true)}
-            onMouseLeave={() => setHover(false)}
-            title={`${label} — ${node.id.slice(0, 8)}`}
-            style={{
-                display: "flex", alignItems: "center", gap: 4,
-                padding: "3px 6px", paddingLeft: 6 + depth * 12,
-                fontSize: 11, borderRadius: 3, cursor: "pointer", marginBottom: 1,
-                background: selected ? "#22436b" : hover ? "#1d1d33" : "transparent",
-                // A hidden row stays LISTED but reads as absent — that is the whole difference
-                // between hiding and deleting, and the panel is where it has to be legible.
-                opacity: node.hidden || inheritedHidden ? 0.4 : 1,
-                // The drop indicator: a line where it would land, or a ring around the row it
-                // would go inside. Saying which of the two is about to happen is the whole job.
-                boxShadow: dropHint === "before" ? `inset 0 2px 0 ${UI.accent}`
-                    : dropHint === "after" ? `inset 0 -2px 0 ${UI.accent}`
-                    : dropHint === "inside" ? `inset 0 0 0 1px ${UI.accent}` : undefined,
-                borderLeft: selected ? "2px solid #4da3ff" : "2px solid transparent",
-                color: selected ? "#f0f6ff" : "#c8c8d8"
-            }}
-        >
-            {/* The disclosure triangle is its own hit target so clicking it does not also select. */}
-            <span
-                onClick={e => { if (hasChildren) { e.stopPropagation(); onToggle(); } }}
-                style={{ width: 10, textAlign: "center", color: "#7a7a95", cursor: hasChildren ? "pointer" : "default" }}
-            >
-                {hasChildren ? (collapsed ? "▸" : "▾") : ""}
-            </span>
-            <span style={{ width: 12, textAlign: "center", color: selected ? "#9ecbff" : "#8a8aa5" }}>
-                {hasChildren ? (isGroup ? "🗀" : "▤") : (LAYER_ICONS[node.type] || "◦")}
-            </span>
-            {renaming ? (
-                <input
-                    autoFocus
-                    defaultValue={label}
-                    onClick={e => e.stopPropagation()}
-                    onBlur={e => { setRenaming(false); onRename(e.target.value); }}
-                    onKeyDown={e => {
-                        if (e.key === "Enter") { setRenaming(false); onRename((e.target as HTMLInputElement).value); }
-                        if (e.key === "Escape") setRenaming(false);   // abandon, keep the old name
-                    }}
-                    style={{ flex: 1, minWidth: 0, fontSize: 11, padding: "0 2px", background: UI.bg, color: UI.text, border: `1px solid ${UI.accent}`, borderRadius: 2 }}
-                />
-            ) : (
-                <span
-                    onDoubleClick={e => { e.stopPropagation(); setRenaming(true); }}
-                    style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                >{label}</span>
-            )}
-            {/* Opacity, as a percentage. Shown on hover or whenever it is not 100 — a layer
-                that is half-faded should say so without being hovered. It edits this node's
-                OWN opacity; what you see on canvas is that multiplied by its ancestors'. */}
-            {(hover || node.style.opacity < 1) && (
-                <input
-                    type="number" min={0} max={100} step={5}
-                    value={Math.round(node.style.opacity * 100)}
-                    title="Opacity %"
-                    onClick={e => e.stopPropagation()}
-                    onChange={e => {
-                        const pct = parseFloat(e.target.value);
-                        // Skip a half-typed value rather than substituting 0 — the same rule
-                        // NumInput follows, for the same reason: `|| 0` makes a node vanish.
-                        if (!Number.isFinite(pct)) return;
-                        onOpacity(Math.min(1, Math.max(0, pct / 100)));
-                    }}
-                    style={{ width: 34, fontSize: 9, padding: "0 2px", background: UI.bg, color: UI.textDim,
-                        border: `1px solid ${UI.line}`, borderRadius: 2 }}
-                />
-            )}
-            {/* Hide and lock. Shown on hover or when SET, so the panel stays quiet but a
-                hidden/locked node always says so — a control you cannot see is a state you
-                cannot explain. An inherited flag is shown greyed and does nothing on click:
-                the node is not the one holding it. */}
-            <span
-                title={inheritedHidden ? "Hidden by a parent" : node.hidden ? "Show" : "Hide"}
-                onClick={e => { e.stopPropagation(); if (!inheritedHidden) onFlag({ hidden: !node.hidden }); }}
-                style={{ width: 12, textAlign: "center", fontSize: 10, cursor: inheritedHidden ? "default" : "pointer",
-                    color: inheritedHidden ? "#4a4a60" : node.hidden ? "#8a8aa5" : "#5f5f7a",
-                    opacity: hover || node.hidden || inheritedHidden ? 1 : 0 }}
-            >{node.hidden || inheritedHidden ? "◌" : "◉"}</span>
-            <span
-                title={inheritedLocked ? "Locked by a parent" : node.locked ? "Unlock" : "Lock"}
-                onClick={e => { e.stopPropagation(); if (!inheritedLocked) onFlag({ locked: !node.locked }); }}
-                style={{ width: 12, textAlign: "center", fontSize: 10, cursor: inheritedLocked ? "default" : "pointer",
-                    color: inheritedLocked ? "#4a4a60" : node.locked ? "#d8a657" : "#5f5f7a",
-                    opacity: hover || node.locked || inheritedLocked ? 1 : 0 }}
-            >{node.locked || inheritedLocked ? "⊘" : "◇"}</span>
-            {/* Badges say what a folder DOES, which is the thing you actually need at a glance. */}
-            {isAutoLayout && <span title="Auto-layout" style={{ fontSize: 9, color: "#6f9", opacity: 0.8 }}>⇥</span>}
-            {node.type === "core.instance" && <span title="Component instance" style={{ fontSize: 9, color: "#b98cff" }}>⧉</span>}
         </div>
     );
 }

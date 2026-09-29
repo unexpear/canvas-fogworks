@@ -24,8 +24,8 @@
       "area": "app-shell",
       "priority": "P1",
       "status": "open",
-      "summary": "Continue extracting cohesive panels and workflows from App.tsx; project files, image-sequence import, workspace/runtime controls, the 3D inspector and the folders drawer are tested seams.",
-      "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx", "src/app/FoldersDrawer.tsx"]
+      "summary": "Continue extracting cohesive panels and workflows from App.tsx. The layers panel and document toolbar (theme, state, timeline, light, background, screen) are tested seams, along with project files, image-sequence import, workspace/runtime controls, the 3D inspector and the folders drawer. The inspector, timeline transport, script and token panels, and import placement callbacks remain in App.tsx.",
+      "evidence": ["src/app/App.tsx", "src/app/LayersPanel.tsx", "src/app/DocumentControls.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx", "src/app/FoldersDrawer.tsx"]
     },
     {
       "id": "GAMEPLAY-001",
