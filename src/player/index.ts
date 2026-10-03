@@ -10,7 +10,8 @@ import { stepGameplay, interactGameplay2D } from "../core/runtime/GameplaySessio
 import { InputActions } from "../core/runtime/InputActions";
 import { browserInputStorage, eventCode, inputSettingsSummary, platformerInput, readInputSettings, writeInputSettings } from "../core/runtime/InputSettings";
 import { mountInputSettings } from "../core/runtime/InputSettingsView";
-import { captureProgress2D, parseProgress, restoreProgress2D, serializeProgress } from "../runtime/PlayerProgress";
+import { captureProgress2D, restoreProgress2D, serializeProgress } from "../runtime/PlayerProgress";
+import { adoptProgress } from "../runtime/SaveMigration";
 import { CampaignState, EDITOR_CAMPAIGN_GAME_ID, campaignFromProgress, emptyCampaign, openCampaignLevel, rememberLeavingLevel, withCampaign } from "../runtime/CampaignProgress";
 import { browserProgressStore } from "../runtime/ProgressStore";
 import { worldFrom, stepsFor, NO_INPUT, applyWorld, applySpawns, applyCells, applyFacing, applyTileAnimations, playBounds, type WorldState } from "../core/runtime/World";
@@ -107,12 +108,12 @@ for (const id of ["checkpoint","save-progress","load-progress"]) document.getEle
             world = { ...world, checkpoint: { playerId: controlled, position: { x: body.x,y: body.y,z: 0 } } }; note.textContent = "Checkpoint set."; return;
         }
         const hash = await gameId; if (token !== generation) return;
-        const store = browserProgressStore(hash);
+        const store = browserProgressStore(hash, game.saveMigrations ?? []);
         if (id === "save-progress") { await store.write(serializeProgress(withCampaign(captureProgress2D(world,hash,level,controlled), campaign))); note.textContent = "Progress saved."; }
         else {
             const content = await store.read(); if (token !== generation) return;
             if (!content) throw new Error("No saved progress for this game build.");
-            const progress = parseProgress(content,hash,"2d"), savedLevel = game.levels[progress.level];
+            const progress = adoptProgress(content,hash,"2d", game.saveMigrations ?? []), savedLevel = game.levels[progress.level];
             if (!savedLevel) throw new Error("Saved level is not packaged.");
             const restoredDoc = deserializeDocument(savedLevel.content), restored = restoreProgress2D(restoredDoc,progress);
             campaign = campaignFromProgress(progress);

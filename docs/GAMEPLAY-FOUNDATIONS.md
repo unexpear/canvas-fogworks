@@ -6,6 +6,7 @@ and debugging; general behavior lifecycle remains open. Player-progress v2 retai
 continuations and accepts v1 saves without them.
 
 <!-- describes: src/core/document/Gameplay.ts, src/core/runtime/InputActions.ts, src/core/runtime/Interaction.ts, src/core/runtime/GameplaySession.ts, src/core/runtime/Gameplay3D.ts, src/core/runtime/World3D.ts, src/runtime/PlayerProgress.ts, src/runtime/CampaignProgress.ts, src/runtime/PlayerSession3D.ts, src/player3d, src/player, src/app/GameplayPanel.tsx -->
+<!-- re-read 2026-10-02: explicit save-build maps and progress-writer kill checks are described above. Schema 89 and progress v1–v6 records are unchanged. -->
 
 Implemented 2026-09-12 as the first bounded Q06 slice. These features serve both 2D and 3D;
 they do not replace the physics solver or constitute a general scripting/component framework.
@@ -80,8 +81,14 @@ matching the linked-level package cap. Entity-local values stay on their level. 
 are not part of this snapshot.
 
 The save format has its own version and profile (`2d`/`3d`), and is tied to the package-content
-SHA-256 hash. Changed package content gets a different slot; cross-build save migration is not
-inferred. This hash is not an executable signature or a compatibility promise across engine changes.
+SHA-256 hash. Changed package content gets a different slot. A later build adopts an older slot
+only when that build names the previous hash and the save's progress version in an explicit list
+of at most eight entries. Progress v1–v6 still load for the same hash; accepting an older format
+does not accept a different build. The adopted record is rewritten to the current hash in memory.
+The previous slot file is left in place, and the current slot is written when the player saves,
+not when the older slot is loaded. A current slot that exists is used even if a predecessor also
+exists. A corrupt current slot is not replaced by an older build. This hash is not an executable
+signature or a compatibility promise across engine changes.
 Malformed, oversized, wrong-game/profile, duplicate-ID, missing-template, unknown-level and invalid
 position/reference data are refused before adoption. Save size is capped at 2MiB; instance, counter,
 despawn and cell tables are bounded. Saves contain IDs/primitive state, not serialized project nodes,
@@ -121,7 +128,11 @@ owned demo at `release/gameplay-foundation-20260912/desktop/win-unpacked/` also 
 actual executable startup smoke. These are host-machine results, not clean-machine certification.
 
 Embedded 3D sound cues now play through the same bounded Web Audio path as 2D. Streaming, buses and
-reusable audio assets remain [AUDIO-001](BACKLOG.json). Still open in Q06/F2: full prefab instances,
-cross-build save migrations, richer character/physics semantics, portable/browser save UX and full
-process-crash/relaunch acceptance. Visited-level campaign saves do not by themselves prove a writer crash or a fresh process.
+reusable audio assets remain [AUDIO-001](BACKLOG.json). Explicit cross-build adoption is covered by
+`SaveMigration` tests. `npm run test:progress-crash` kills the progress writer and reads the last
+committed slot in a fresh process; it is not a power-loss proof or a GUI renderer crash.
+Still open in Q06/F2: full prefab instances, an editor control for the migration list, richer
+character/physics semantics and portable/browser save UX. Document schema 89 is unchanged: the
+progress record and project file did not gain fields. The 3D package keeps version 1 and adds an
+optional `saveMigrations` field, following the same optional-field rule as `fonts`.
 F1 clean-machine certification is also still open. Existing installers/assets are retained.

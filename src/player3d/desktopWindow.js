@@ -1,7 +1,7 @@
 /** @module desktopWindow @description Sandboxed game window with only a bounded progress slot; no editor, network or arbitrary filesystem authority. */
 const { app, BrowserWindow, session, ipcMain } = require("electron");
 const fs = require("fs"), path = require("path");
-const { createProgressFile } = require("./progressFile");
+const { createProgressFile, saveMigrationsFromHtml } = require("./progressFile");
 const { pathToFileURL } = require("url");
 const { randomUUID } = require("crypto");
 
@@ -32,9 +32,12 @@ async function createGameWindow(html, { show = true, progressPreload = path.join
     const header = fs.readFileSync(html, "utf8");
     const gameId = header.match(/data-sha256="([a-f0-9]{64})"/)?.[1];
     if (!gameId) { win.destroy(); throw new Error("Game package identity is missing."); }
+    let fromGameIds;
+    try { fromGameIds = saveMigrationsFromHtml(header, gameId).map(item => item.fromGameId); }
+    catch (error) { win.destroy(); throw error; }
     installProgressHandlers();
     const windowId = win.webContents.id;
-    progressWindows.set(windowId, { url: allowed, store: createProgressFile(path.join(app.getPath("userData"), "player-progress"), gameId) });
+    progressWindows.set(windowId, { url: allowed, store: createProgressFile(path.join(app.getPath("userData"), "player-progress"), gameId, { fromGameIds }) });
     win.on("closed", () => progressWindows.delete(windowId));
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", event => event.preventDefault());

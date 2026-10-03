@@ -1,6 +1,8 @@
 # 3D Foundation — adoption plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
+<!-- re-read 2026-10-02: progress adoption does not change meshes, lighting, collision or import.
+     Clean-machine EXE certification remains open. -->
 <!-- re-read 2026-09-28: runtime now stores named keyboard bindings for play. The packaged 3D
      player plays embedded sound cues and draws screen-space text. Meshes, lighting, collision
      and import behavior are unchanged. Clean-machine EXE certification remains open. -->

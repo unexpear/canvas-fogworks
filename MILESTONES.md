@@ -23,6 +23,8 @@ for limits and verification; this does not complete the broader engine milestone
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
+<!-- re-read 2026-10-02: the 2D game package can carry an optional saveMigrations list. Milestone
+     status and historical slice counts are unchanged. -->
 <!-- re-read 2026-09-28: named-input Controls live under src/core and do not change milestone
      status or historical slice counts. Embedded 3D cues and screen-space text do not either.
      Shell source pins include FoldersDrawer.tsx.

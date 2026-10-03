@@ -1,6 +1,7 @@
 # Standalone 3D export and Windows player
 
 <!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes. -->
 <!-- re-read 2026-09-28: package.json also records authoring benchmarks and smoke:crash-relaunch.
      readRecovery can decline or preserve a snapshot. 3D export packages custom fonts, diagnostics and unsigned provenance. -->
 
@@ -146,8 +147,12 @@ matches the HTML and contains no host path. It is included in `ci`. The harness 
 still has a context; that is clean-profile acceptance of the unpacked player, not hardware-GPU
 certification or a signed Windows image on a separate computer.
 
+A packaged game may declare `saveMigrations`. The desktop progress bridge reads a missing current
+slot from those previous hashes only; the renderer still cannot choose a game id or path. Loading
+that older slot does not write the new one. `npm run test:progress-crash` is the writer-kill check.
+
 Still open: separate clean Windows-machine certification of the unpacked EXE; prefab campaign snapshots,
-portable save files, multiple slots and cross-build save migrations; long-session/GPU/device-loss evidence;
+portable save files, multiple slots and an editor control for save migrations; long-session/GPU/device-loss evidence;
 larger-content streaming; signatures, trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.

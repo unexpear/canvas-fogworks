@@ -7,7 +7,10 @@ the project file. `test:recovery` kills the isolated writer at editing, partial-
 pre-rename, post-rename and post-directory-fsync checkpoints, then checks that the next replacement
 removes a temporary file left by a killed partial write. The post-rename kill still sees the new
 bytes and is not a power-loss proof, because the directory entry was not flushed. Power-loss
-durability is not claimed. See [Production workflows](PRODUCTION-WORK.md).
+durability is not claimed. `npm run test:progress-crash` is the separate gameplay-slot check:
+it kills that writer at partial-write, flush, pre-rename, post-rename and directory-fsync, then
+parses the last committed progress record in a fresh process. It is not an Electron renderer crash.
+See [Production workflows](PRODUCTION-WORK.md).
 
 Behavior timers/reuse/debugging (2026-09-19): **2,326 tests in 52 suites** pass. New coverage
 includes 2D/3D delayed repeats, saved continuations, cancellation, runtime bounds, shared-asset
@@ -43,6 +46,8 @@ samples under `scripts/benchmark-host-samples/` do not move it. Software GL stay
 not a hardware budget. Workloads, limits and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- re-read 2026-10-02: test:progress-crash covers the gameplay progress slot. 3D export can stamp
+     saveMigrations. The Jest contract is otherwise unchanged. -->
 <!-- re-read 2026-09-28: player HTML and the 3D host expose named-input Controls. World3D, the 3D
      player host and player-acceptance also cover embedded cues and screen-space overlay text.
      FoldersDrawer stays extracted. The Jest contract and shell source pins are otherwise unchanged. -->

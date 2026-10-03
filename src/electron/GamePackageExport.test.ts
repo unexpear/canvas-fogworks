@@ -146,6 +146,17 @@ test("custom fonts are packaged from a directory or payload and provenance omits
     expect(fromPayload.fonts).toHaveLength(1);
     await expect(collectGamePackage(project, JSON.stringify(raw))).rejects.toThrow(/custom font "Owned Face"/);
 });
+test("export stamps a non-empty save migration table and the packaged HTML exposes it", async () => {
+    const migrations = [{ fromGameId: "b".repeat(64), versions: [5, 6] }];
+    const serialized = await collectGamePackage(project, JSON.stringify(raw), { saveMigrations: migrations });
+    const digest = createHash("sha256").update(serialized).digest("hex");
+    expect(JSON.parse(serialized).saveMigrations).toEqual(migrations);
+    expect(createPackageReader(serialized).saveMigrations).toEqual(migrations);
+    const { saveMigrationsFromHtml } = require("../player3d/progressFile");
+    expect(saveMigrationsFromHtml(game3DHtml(serialized, Buffer.from("/* owned player */")), digest)).toEqual(migrations);
+    expect(JSON.parse(await collect()).saveMigrations).toBeUndefined();
+    await expect(collectGamePackage(project, JSON.stringify(raw), { saveMigrations: [{ fromGameId: "nope", versions: [5] }] })).rejects.toThrow(/build id/);
+});
 test("HTML keeps untrusted document text out of markup and binds the UTF8 payload digest", async () => {
     raw.document.nodes.triangle.userData = { note: { type: "string", value: "</script><script>alert('bad')</script> café" } };
     const serialized = await collect(), html = game3DHtml(serialized, Buffer.from("/* owned player */"));

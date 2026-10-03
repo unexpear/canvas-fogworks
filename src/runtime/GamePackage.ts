@@ -9,6 +9,10 @@ import { parseGlb } from "../core/import/Gltf";
 import type { PlayerProjectReader } from "./ProjectReadHost";
 import { fontFaceError, fontStackFamilies, inspectDocumentProfile, inspectModelProfile, isGenericFontFamily, normalizeFontFamily } from "./PackageProfile";
 import type { PackageDiagnostic } from "./PackageProfile";
+import type { SaveBuildMigration } from "./SaveMigration";
+const { validateSaveMigrationTable } = require("./saveMigrationTable") as {
+    validateSaveMigrationTable: (migrations: unknown, toGameId?: string) => SaveBuildMigration[];
+};
 
 export const GAME_PACKAGE_LIMITS = Object.freeze({ jsonBytes: 64 * 1024 * 1024,
     levelBytes: 20_000_000, fileBytes: 16 * 1024 * 1024, assetBytes: 32 * 1024 * 1024,
@@ -31,11 +35,14 @@ export interface GamePackageManifest {
     levels: PackageLevel[];
     files: PackageFile[];
     fonts?: PackageFont[];
+    /** Previous content hashes whose saves this package may adopt. Absent means none. */
+    saveMigrations?: SaveBuildMigration[];
 }
 export interface PackagedGameReader extends PlayerProjectReader {
     readonly entryKey: string;
     readonly fonts: readonly PackagedFontFace[];
     readonly warnings: readonly PackageDiagnostic[];
+    readonly saveMigrations: readonly SaveBuildMigration[];
 }
 interface ValidLevel { content: string; links: Map<string, string>; resources: Map<string, PackageFile>; models: Set<string> }
 
@@ -129,7 +136,8 @@ function envelope(value: unknown): Record<string, unknown> {
     const result = value as Record<string, unknown>;
     const keys = Object.keys(result);
     const required = ["format", "version", "entry", "requiredCapabilities", "levels", "files"];
-    if (keys.some(key => !required.includes(key) && key !== "fonts") || required.some(key => !Object.prototype.hasOwnProperty.call(result, key))) {
+    const optional = ["fonts", "saveMigrations"];
+    if (keys.some(key => !required.includes(key) && !optional.includes(key)) || required.some(key => !Object.prototype.hasOwnProperty.call(result, key))) {
         throw new Error("Invalid or unsupported package fields.");
     }
     return result;
@@ -293,10 +301,15 @@ export function createPackageReader(serialized: string): PackagedGameReader {
     };
     const warningList = Object.freeze(warnings.map(item => Object.freeze({ ...item })));
     const fontList = Object.freeze(publishedFonts.map(font => Object.freeze({ ...font })));
+    const migrationList = Object.freeze((Object.prototype.hasOwnProperty.call(raw, "saveMigrations")
+        ? validateSaveMigrationTable(raw.saveMigrations) : []).map(item => Object.freeze({
+        fromGameId: item.fromGameId, versions: Object.freeze([...item.versions])
+    })));
     return Object.freeze({
         entryKey: entry,
         fonts: fontList,
         warnings: warningList,
+        saveMigrations: migrationList,
         async readProgressLevel(key: string) { return { filePath: key, content: level(key).content }; },
         async readEntryFile(key: string) {
             if (key !== entry) throw new Error("Unknown package entry key.");

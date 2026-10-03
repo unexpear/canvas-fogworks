@@ -242,6 +242,17 @@ test("sound cues, morph targets and unsupported glTF requirements are diagnosed"
     morph.files[0].data = refused.toString("base64"); morph.files[0].bytes = refused.length;
     expect(() => load(morph)).toThrow(/KHR_draco_mesh_compression/);
 });
+test("save migrations are an optional explicit table", () => {
+    expect(load().saveMigrations).toEqual([]);
+    const manifest = fixture();
+    manifest.saveMigrations = [{ fromGameId: "b".repeat(64), versions: [5, 6] }];
+    expect(load(manifest).saveMigrations).toEqual([{ fromGameId: "b".repeat(64), versions: [5, 6] }]);
+    manifest.saveMigrations = [{ fromGameId: "b".repeat(64), versions: [7] }];
+    expect(() => load(manifest)).toThrow(/versions/);
+    const duplicated = fixture();
+    duplicated.saveMigrations = [{ fromGameId: "b".repeat(64), versions: [5] }, { fromGameId: "b".repeat(64), versions: [6] }];
+    expect(() => load(duplicated)).toThrow(/Duplicate/);
+});
 test("embedded SVG scene images are refused by name", () => {
     const manifest = fixture(), doc = JSON.parse(manifest.levels[0].content);
     doc.document.nodes.badge = { ...doc.document.nodes.triangle, id: "badge", type: "core.image", spatial3d: undefined,

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "lastReconciled": "2026-09-28",
+  "lastReconciled": "2026-10-02",
   "sourceRevision": "1486138",
   "productDirection": {
     "mode": "dual-track",
@@ -32,8 +32,8 @@
       "area": "runtime",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend delivered schema-88 gameplay (graphs through callable functions, lifecycle and custom events, typed entity and current-level variables, named inputs, 2D/3D interaction/spawning/checkpoints and current-level progress). Player-progress v6 now keeps visited-level snapshots and game-scoped values across transitions; v1–v5 saves still load. The editor and both players now rebind those named inputs from a Controls panel and store version-1 bindings outside the document; malformed settings fall back to the defaults. Full prefabs, cross-build save migrations and process-crash/relaunch acceptance remain open.",
-      "evidence": ["docs/BEHAVIOR-GRAPHS.md", "docs/GAMEPLAY-FOUNDATIONS.md", "src/core/document/BehaviorGraph.ts", "src/core/runtime/BehaviorRunner.ts", "src/app/BehaviorGraphPanel.tsx", "src/core/runtime/Gameplay3D.ts", "src/core/runtime/GameplaySession.ts", "src/core/runtime/InputSettings.ts", "src/core/runtime/InputSettingsView.ts", "src/app/InputSettingsHost.tsx", "src/runtime/PlayerProgress.ts", "src/runtime/CampaignProgress.ts", "scripts/smoke-behavior.js", "scripts/smoke-player.js", "MILESTONES.md#phase-18-game-runtime"]
+      "summary": "Extend delivered schema-88 gameplay (graphs through callable functions, lifecycle and custom events, typed entity and current-level variables, named inputs, 2D/3D interaction/spawning/checkpoints and current-level progress). Player-progress v6 now keeps visited-level snapshots and game-scoped values across transitions; v1–v5 saves still load. The editor and both players now rebind those named inputs from a Controls panel and store version-1 bindings outside the document; malformed settings fall back to the defaults. A package or caller can name up to eight previous content hashes and the progress versions those saves may use; only that explicit list is rewritten onto the current build, and loading it does not by itself write the new slot. Forced kills of the progress writer at partial-write, flush, pre-rename, post-rename and directory-fsync leave a fresh process able to read the last committed slot. That is not a power-loss proof or a GUI renderer crash. Full prefabs remain open, and there is no editor control for authoring the migration list.",
+      "evidence": ["docs/BEHAVIOR-GRAPHS.md", "docs/GAMEPLAY-FOUNDATIONS.md", "src/core/document/BehaviorGraph.ts", "src/core/runtime/BehaviorRunner.ts", "src/app/BehaviorGraphPanel.tsx", "src/core/runtime/Gameplay3D.ts", "src/core/runtime/GameplaySession.ts", "src/core/runtime/InputSettings.ts", "src/core/runtime/InputSettingsView.ts", "src/app/InputSettingsHost.tsx", "src/runtime/PlayerProgress.ts", "src/runtime/CampaignProgress.ts", "src/runtime/SaveMigration.ts", "src/runtime/saveMigrationTable.js", "src/player3d/progressFile.js", "scripts/progress-crash.test.js", "scripts/smoke-behavior.js", "scripts/smoke-player.js", "MILESTONES.md#phase-18-game-runtime"]
     },
     {
       "id": "EXPORT-001",

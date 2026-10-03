@@ -1,6 +1,7 @@
 # Shared player runtime — loading and session lifecycle
 
 <!-- describes: src/runtime, src/app/Asset3DImportWorkflow.ts, src/app/LevelTransitionWorkflow.ts, scripts/smoke-level-transition.js -->
+<!-- re-read 2026-10-02: PlayerSession3D accepts an explicit save-migration list. Loading and session staging are otherwise unchanged. -->
 
 Implemented 2026-09-12 as Q02 loading and player-session slices in the [engine roadmap](ENGINE-ROADMAP.md).
 These modules provide reusable loading/session behavior, not the desktop host itself. The
@@ -74,7 +75,7 @@ No entry-read IPC method has been added to the editor bridge.
 
 ## Player session lifecycle
 
-`PlayerSession3D(host, entryKey, gameId?)` retains one configured entry and a privately staged candidate
+`PlayerSession3D(host, entryKey, gameId?, saveMigrations?)` retains one configured entry and a privately staged candidate
 for each asynchronous load. Existing editor play mode is unchanged and does not use this class.
 
 | Operation | Contract |
@@ -86,7 +87,7 @@ for each asynchronous load. Existing editor play mode is unchanged and does not 
 | `advance(timestamp, input?)` | Consume a finite nonnegative monotonic timestamp in milliseconds and current movement input; use the existing bounded 60 Hz solver |
 | `frame(width, height)` | Derive a backend-neutral scene from simulation transforms, shared animation and hydrated resources; return null when stopped |
 | `interact()` / `checkpoint()` / `respawn()` | Shared gameplay commands against transient world state, not document history |
-| `saveProgress()` / `restoreProgress(content)` | Require the package hash; encode bounded progress or validate and stage a saved level before adoption |
+| `saveProgress()` / `restoreProgress(content)` | Require the package hash; encode bounded progress or adopt a same-build save, or a save whose hash and progress version are in the session's explicit migration list, then stage that level before adoption |
 
 A candidate must deserialize, hydrate and contain a 3D camera, and its initial simulation must
 be constructed before the session replaces any active document/world. Failure preserves the

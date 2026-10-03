@@ -7,6 +7,8 @@ and two-clip pose blending. GPU skinning covers skins of at most 16 joints, with
 See [Animation workflow](ANIMATION.md).
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-10-02: 2D game HTML preserves an optional saveMigrations list when the caller
+     sets it. Pixelorama and Tiled comparison rows are unchanged. -->
 <!-- re-read 2026-09-28: 2D game HTML gained a named-input Controls panel. Pixelorama and Tiled
      comparison rows are unchanged. -->
 <!-- re-read 2026-09-07: native animation, Aseprite timing preservation, whole-canvas PNG and

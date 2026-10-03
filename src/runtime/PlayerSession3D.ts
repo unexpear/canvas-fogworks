@@ -14,7 +14,8 @@ import type { Frame3D } from "../renderer/Scene3D";
 import type { PlayerProjectReader } from "./ProjectReadHost";
 import { RuntimeProject } from "./RuntimeProject";
 import { checkpoint3D, interact3D, MAX_RULE_SOUNDS } from "../core/runtime/Gameplay3D";
-import { captureProgress3D, parseProgress, restoreProgress3D, serializeProgress } from "./PlayerProgress";
+import { captureProgress3D, restoreProgress3D, serializeProgress } from "./PlayerProgress";
+import { adoptProgress, SaveBuildMigration, saveMigrationTable } from "./SaveMigration";
 import { CampaignState, campaignFromProgress, emptyCampaign, openCampaignLevel, rememberLeavingLevel, withCampaign } from "./CampaignProgress";
 
 export type PlayerStatus3D = "stopped" | "loading" | "running" | "paused" | "ended";
@@ -30,7 +31,10 @@ export class PlayerSession3D {
     private campaign: CampaignState = emptyCampaign();
     private pendingSounds: { source: string; volume: number }[] = [];
 
-    constructor(private readonly host: PlayerProjectReader, private readonly entryKey: string, private readonly gameId = "") {}
+    private readonly saveMigrations: readonly SaveBuildMigration[];
+    constructor(private readonly host: PlayerProjectReader, private readonly entryKey: string, private readonly gameId = "", saveMigrations: readonly SaveBuildMigration[] = []) {
+        this.saveMigrations = saveMigrationTable(saveMigrations, /^[a-f0-9]{64}$/.test(gameId) ? gameId : undefined);
+    }
 
     get status(): PlayerStatus3D {
         if (this.pending) return "loading";
@@ -69,8 +73,8 @@ export class PlayerSession3D {
         if (!this.active?.controlled || this.pending || this.active.world.transitionTo) throw new Error("Cannot save without a stable playable level.");
         return serializeProgress(withCampaign(captureProgress3D(this.active.world, this.gameId, this.active.project.filePath!, this.active.controlled), this.campaign));
     }
-    restoreProgress(serialized: string): Promise<boolean> {
-        const progress = parseProgress(serialized, this.gameId, "3d");
+    async restoreProgress(serialized: string): Promise<boolean> {
+        const progress = adoptProgress(serialized, this.gameId, "3d", this.saveMigrations);
         const loaded = campaignFromProgress(progress);
         const read = this.host.readProgressLevel;
         if (!read) throw new Error("This host does not support saved-level lookup.");

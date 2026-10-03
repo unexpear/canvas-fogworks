@@ -23,7 +23,7 @@ async function boot() {
     const fonts = document.getElementById("fonts");
     if (fonts) fonts.dataset.loaded = host.fonts.map(font => font.family).join("\n");
     const bridge = (window as Window & { playerProgress?: ProgressStore }).playerProgress;
-    mountPlayer3D(new PlayerSession3D(host, host.entryKey, expected), bridge ?? browserProgressStore(expected));
+    mountPlayer3D(new PlayerSession3D(host, host.entryKey, expected, host.saveMigrations), bridge ?? browserProgressStore(expected, host.saveMigrations));
 }
 void boot().catch(error => {
     const status = document.getElementById("status")!; status.dataset.state = "error";

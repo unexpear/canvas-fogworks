@@ -1,6 +1,7 @@
 # Inline game package v1 — manifest and read-only resolver
 
 <!-- describes: src/runtime/GamePackage.ts, src/runtime/PackageProfile.ts, src/runtime/GamePackage.test.ts, src/runtime/RuntimeBoundary.test.ts, scripts/smoke-level-transition.js -->
+<!-- re-read 2026-10-02: optional saveMigrations names previous content hashes. Package version stays 1. The rest of this manifest is unchanged. -->
 
 Implemented 2026-09-12 as the bounded Q03 format/resolver slice of the
 [engine roadmap](ENGINE-ROADMAP.md). This is a new runtime package format, separate from
@@ -35,6 +36,7 @@ Unknown fields are refused in the v1 envelope and its level/link/resource/file r
 | `levels` | Array of `{ id, content, links, resources }` |
 | `files` | Array of `{ id, kind, bytes, data }` |
 | `fonts` | Optional array of `{ family, weight, italic, file }`. Absent means no custom faces |
+| `saveMigrations` | Optional array of `{ fromGameId, versions }`, at most eight. `fromGameId` is a previous package-content SHA-256. `versions` lists progress format versions 1–6 that this build may adopt from that hash. Absent or empty means no cross-build adoption. Package version stays 1. Older readers that refuse unknown fields reject a package that includes this array |
 
 IDs contain lowercase ASCII letters, digits, `_` and `-`, start with a letter/digit and are at
 most 64 characters. Reserved prototype names are refused. Duplicate level/file IDs are errors.

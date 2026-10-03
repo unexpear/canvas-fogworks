@@ -7,7 +7,12 @@ import { playerEntityId } from "../document/Entity";
 import { worldFrom, runtimeExclusions } from "../runtime/World";
 
 export interface GameLevel { content: string; links: Record<string, string>; }
-export interface GamePackage { entry: string; levels: Record<string, GameLevel>; }
+export interface GamePackage {
+    entry: string;
+    levels: Record<string, GameLevel>;
+    /** Previous package-content hashes this build may adopt. Absent means none. Preserved when present; the editor does not author it. */
+    saveMigrations?: { fromGameId: string; versions: readonly number[] }[];
+}
 export function gameDocumentTargets(content: string): string[] {
     if (content.length > 32 * 1024 * 1024) throw new Error("A game level exceeds 32MB.");
     const doc = deserializeDocument(content);

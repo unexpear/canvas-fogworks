@@ -8,6 +8,7 @@ are now implemented for 2D/3D, including a Controls panel that rebinds those nam
 See [Gameplay foundations](GAMEPLAY-FOUNDATIONS.md) for exact
 semantics and verification. The schema 78 baseline below is historical; general scripting,
 full prefabs and complete 3D audio remain open. Visited-level game values are saved as player-progress v6.
+Explicit cross-build adoption and `npm run test:progress-crash` cover listed content hashes and a killed progress writer; neither is a prefab system or a power-loss proof.
 
 ## Delivered baseline (schema 78, app 0.0.5)
 

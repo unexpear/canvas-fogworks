@@ -13,6 +13,9 @@ import type { GamePackageManifest, PackageFile, PackageFileKind, PackageFont, Pa
 import { fontStackFamilies, isGenericFontFamily, normalizeFontFamily } from "../runtime/PackageProfile";
 import type { PackageDiagnostic } from "../runtime/PackageProfile";
 const { resolveConfined } = require("./confine");
+const { validateSaveMigrationTable } = require("../runtime/saveMigrationTable") as {
+    validateSaveMigrationTable: (migrations: unknown, toGameId?: string) => { fromGameId: string; versions: number[] }[];
+};
 
 /** Read at most max+1 bytes, even if a file grows after stat. Reject changes during this read. */
 async function readBounded(file: string, max: number): Promise<Buffer> {
@@ -35,7 +38,12 @@ async function readBounded(file: string, max: number): Promise<Buffer> {
 }
 const decode = (data: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(data);
 
-export interface GamePackageSources { fontsDirectory?: string; fontPayloads?: Uint8Array[] }
+export interface GamePackageSources {
+    fontsDirectory?: string;
+    fontPayloads?: Uint8Array[];
+    /** Stamped onto the manifest when non-empty. Older readers that refuse unknown fields reject that package. */
+    saveMigrations?: readonly { fromGameId: string; versions: readonly number[] }[];
+}
 export interface ProvenanceIdentity { appVersion: string; sourceRevision: string | null }
 export interface GameProvenance {
     format: "canvas-fogworks-game-provenance";
@@ -224,6 +232,10 @@ export async function collectGamePackage(project: string, liveContent: string, s
             }
         }
         manifest.fonts = records;
+    }
+    if (sources.saveMigrations !== undefined) {
+        const table = validateSaveMigrationTable(sources.saveMigrations);
+        if (table.length) manifest.saveMigrations = table;
     }
     const serialized = JSON.stringify(manifest);
     createPackageReader(serialized); // No output is published until the independent player accepts it.
