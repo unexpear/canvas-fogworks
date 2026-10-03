@@ -1,7 +1,10 @@
 # Standalone 3D export and Windows player
 
-<!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
-<!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes. -->
+<!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/playerExeEvidence.js, scripts/check-player-exe-evidence.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes.
+     --stream writes buffer/image/HDR chunks beside the player. Models, fonts, embedded cues and
+     screen-space text stay on their existing paths. check:player-exe-evidence scores a clean-machine
+     record and does not sign or launch the EXE. -->
 <!-- re-read 2026-09-28: package.json also records authoring benchmarks and smoke:crash-relaunch.
      readRecovery can decline or preserve a snapshot. 3D export packages custom fonts, diagnostics and unsigned provenance. -->
 
@@ -40,7 +43,15 @@ From the repository, using a **new**, nonexistent output directory whose parent 
 
 ```powershell
 npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --desktop --fonts "D:\game-builds\fonts"
+npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --desktop --stream --fonts "D:\game-builds\fonts"
 ```
+
+`--stream` moves `buffer`, `image` and `hdr` payloads into `app/streams/<id>.bin` and records their
+SHA-256 in the manifest. glTF/GLB JSON, custom fonts, embedded sound cues and screen-space text stay
+inline. The desktop host reads a chunk only when the active level asks for it and checks the hash
+before the renderer sees the bytes. A browser that opens that HTML directly has no stream bridge, so
+use the default command when the artifact must play from the HTML alone. `--stream` does not raise
+the 32 MiB payload budget and does not sign the executable.
 
 `--fonts` is a directory of `.ttf`/`.otf` files, not a recursive asset scan. Only faces whose family
 is used by a packaged level are embedded. The editor export uses faces registered in that session
@@ -54,6 +65,7 @@ Electron. It does not rebuild or replace the editor installer. Output:
 | `game.provenance.json` | Unsigned hashes, packaged faces and profile warnings; not a signature |
 | `app/game.html` | Self-contained browser player, embedded package and the same provenance |
 | `app/main.cjs`, `app/progressPreload.js`, `app/package.json` | Dedicated Electron host and bounded progress bridge |
+| `app/streams/<id>.bin` | Optional streamed buffer, image or HDR chunk when `--stream` is supplied |
 | `desktop/win-unpacked/Canvas Fogworks Game.exe` | Windows x64 player when `--desktop` is supplied |
 
 Distribute the **entire `win-unpacked` directory**, not the EXE alone. It contains Electron's
@@ -151,9 +163,16 @@ A packaged game may declare `saveMigrations`. The desktop progress bridge reads 
 slot from those previous hashes only; the renderer still cannot choose a game id or path. Loading
 that older slot does not write the new one. `npm run test:progress-crash` is the writer-kill check.
 
-Still open: separate clean Windows-machine certification of the unpacked EXE; prefab campaign snapshots,
+`npm run check:player-exe-evidence` scores a recorded `result.json` from a clean Windows machine.
+The record must list WebGL, Stop, the packaged font, overlay text, the embedded cue, path-free
+provenance, a level transition and a streamed payload, and it must keep `signing` and
+`publisherMetadata` false. `--plan-out` writes `OPERATOR.txt`. With no result file the command
+exits 2. That exit is the open manual gate, not a pass. This repository does not contain such a
+result, and the checker does not launch the EXE or apply a certificate.
+
+Still open: a recorded clean Windows-machine pass of the unpacked EXE; prefab campaign snapshots,
 portable save files, multiple slots and an editor control for save migrations; long-session/GPU/device-loss evidence;
-larger-content streaming; signatures, trusted updates and broader platform support. F1 remains partial.
+world-partition streaming, signatures, trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.
 

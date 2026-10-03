@@ -1,8 +1,10 @@
 /** @module GamePackage.test @description Inline package validation, confinement, graph and player integration regressions. */
 
+import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { createPackageReader, GAME_PACKAGE_LIMITS } from "./GamePackage";
+import type { PackageStreamSource } from "./GamePackage";
 import { fontStackFamilies } from "./PackageProfile";
 const { ownedTestFont } = require("../../scripts/owned-test-font");
 import type { GamePackageManifest } from "./GamePackage";
@@ -262,6 +264,85 @@ test("embedded SVG scene images are refused by name", () => {
     expect(() => load(manifest)).toThrow(/SVG image payloads are not packaged/);
 });
 
+function streamFile(manifest: GamePackageManifest, fileId: string): Uint8Array {
+    const file = manifest.files.find(item => item.id === fileId);
+    if (!file) throw new Error(`Missing inline file ${fileId}.`);
+    const bytes = Uint8Array.from(Buffer.from(file.data, "base64"));
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const files: object[] = manifest.files.map(item => item.id === fileId
+        ? { id: fileId, kind: "buffer", bytes: bytes.length, sha256 } : item);
+    manifest.files = files as GamePackageManifest["files"];
+    return bytes;
+}
+function remembering(bytes: Map<string, Uint8Array>, reads: string[]): PackageStreamSource {
+    return { async read(id: string) { reads.push(id); const found = bytes.get(id); if (!found) throw new Error(`Missing ${id}.`); return found; } };
+}
+test("streamed sidecar bytes are fetched on read and are not retained", async () => {
+    const manifest = fixture(), original = manifest.files[1].data, reads: string[] = [];
+    const bytes = streamFile(manifest, "buffer");
+    expect(() => createPackageReader(JSON.stringify(manifest))).toThrow(/stream source is required/);
+    const reader = createPackageReader(JSON.stringify(manifest), remembering(new Map([["buffer", bytes]]), reads));
+    expect(reads).toEqual([]);
+    expect(await reader.readProject3DSidecar!("entry", "models/triangle.gltf", "triangle.bin")).toBe(original);
+    expect(await reader.readProject3DSidecar!("entry", "models/triangle.gltf", "triangle.bin")).toBe(original);
+    expect(reads).toEqual(["buffer", "buffer"]);
+    const wrong = new Uint8Array(bytes);
+    wrong[0] ^= 0xff;
+    const mismatched = createPackageReader(JSON.stringify(manifest), remembering(new Map([["buffer", wrong]]), []));
+    await expect(mismatched.readProject3DSidecar!("entry", "models/triangle.gltf", "triangle.bin")).rejects.toThrow(/hash mismatch/);
+    const short = createPackageReader(JSON.stringify(manifest), remembering(new Map([["buffer", bytes.slice(0, 1)]]), []));
+    await expect(short.readProject3DSidecar!("entry", "models/triangle.gltf", "triangle.bin")).rejects.toThrow(/length mismatch/);
+});
+test("models and fonts stay inline", () => {
+    const model = JSON.parse(JSON.stringify(fixture()));
+    model.files[0] = { id: "model", kind: "gltf", bytes: model.files[0].bytes, sha256: "ab".repeat(32) };
+    expect(() => createPackageReader(JSON.stringify(model))).toThrow(/buffer, image and hdr/);
+    const font = JSON.parse(JSON.stringify(attachFont(withLabel(fixture(), "Owned Face"))));
+    font.files = font.files.map((file: { id: string; kind: string; bytes: number }) => file.kind === "font"
+        ? { id: file.id, kind: "font", bytes: file.bytes, sha256: "ab".repeat(32) } : file);
+    expect(() => createPackageReader(JSON.stringify(font), { async read() { return new Uint8Array(); } })).toThrow(/buffer, image and hdr/);
+});
+test("the packaged session reads a stream for the active level and keeps that level when the next chunk is wrong", async () => {
+    const manifest = fixture();
+    const bin = streamFile(manifest, "buffer");
+    const gltf = JSON.parse(Buffer.from(manifest.files[0].data, "base64").toString("utf8"));
+    const other = JSON.parse(JSON.stringify(gltf));
+    other.buffers[0].uri = "other.bin";
+    const encoded = Buffer.from(JSON.stringify(other));
+    const files = manifest.files as object[];
+    files.push({ id: "model2", kind: "gltf", bytes: encoded.length, data: encoded.toString("base64") });
+    files.push({ id: "buffer2", kind: "buffer", bytes: bin.length, sha256: createHash("sha256").update(bin).digest("hex") });
+    manifest.files = files as GamePackageManifest["files"];
+    const second = JSON.parse(manifest.levels[1].content);
+    second.document.assets3d.find((asset: { kind: string; source: string }) => asset.kind === "mesh").source = "models/other.gltf";
+    manifest.levels[1].content = JSON.stringify(second);
+    manifest.levels[1].resources = [{ path: "models/other.gltf", file: "model2" }, { path: "models/other.bin", file: "buffer2" }];
+    const reads: string[] = [];
+    const good = new Map<string, Uint8Array>([["buffer", bin], ["buffer2", bin]]);
+    const reader = createPackageReader(JSON.stringify(manifest), remembering(good, reads));
+    const session = new PlayerSession3D(reader, reader.entryKey);
+    await session.start();
+    expect(reads.every(id => id === "buffer")).toBe(true);
+    expect(reads.length).toBeGreaterThan(0);
+    expect(session.frame(320, 240)!.draws.length).toBeGreaterThan(0);
+    session.world!.transitionTo = "second.vde";
+    expect(await session.followTransition()).toBe(true);
+    expect(session.filePath).toBe("second");
+    expect(reads).toContain("buffer2");
+    const again = reads.filter(id => id === "buffer").length;
+    await session.restart();
+    expect(session.filePath).toBe("entry");
+    expect(reads.filter(id => id === "buffer").length).toBeGreaterThan(again);
+    const badReads: string[] = [];
+    const bad = new Map<string, Uint8Array>([["buffer", bin], ["buffer2", Uint8Array.from(bin, byte => byte ^ 0xff)]]);
+    const failed = new PlayerSession3D(createPackageReader(JSON.stringify(manifest), remembering(bad, badReads)), reader.entryKey);
+    await failed.start();
+    failed.world!.transitionTo = "second.vde";
+    await expect(failed.followTransition()).rejects.toThrow(/Package stream hash mismatch/);
+    expect(failed.filePath).toBe("entry");
+    expect(failed.status).toBe("paused");
+    expect(failed.frame(320, 240)!.draws.length).toBeGreaterThan(0);
+});
 test("network and missing image dependencies in model JSON are refused eagerly", () => {
     for (const uri of ["https://example.com/image.png", "missing.png", "data:image/svg+xml;base64,PHN2Zz4="]) {
         const manifest = fixture(), json = JSON.parse(Buffer.from(manifest.files[0].data, "base64").toString("utf8"));

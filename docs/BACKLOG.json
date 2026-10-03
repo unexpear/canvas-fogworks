@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "lastReconciled": "2026-10-02",
-  "sourceRevision": "1486138",
+  "sourceRevision": "bd70525",
   "productDirection": {
     "mode": "dual-track",
     "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
@@ -40,8 +40,8 @@
       "area": "distribution",
       "priority": "P1",
       "status": "open",
-      "summary": "Delivered clean-profile standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics, unsigned release provenance, embedded sound playback and screen-space 2D text in the packaged 3D view. The acceptance smoke removes the source and font directories, then checks WebGL presentation, packaged font registration, drawn overlay text, a played embedded cue and a path-free provenance record. Windows clean-machine EXE certification, signatures, streaming and broader runtime coverage remain open.",
-      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/PackageProfile.ts", "src/runtime/RuntimeAudio.ts", "src/runtime/GamePackage.ts", "src/core/runtime/Gameplay3D.ts", "src/electron/GamePackageExport.ts", "src/player3d/packageFonts.ts", "src/player3d/textOverlay.ts", "src/player3d/PlayerHost3D.ts", "scripts/package-game.js", "scripts/smoke-player.js", "scripts/smoke-player-acceptance.js", "scripts/smoke-player-startup.js", "package.json"]
+      "summary": "Delivered clean-profile standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics, unsigned release provenance, embedded sound playback and screen-space 2D text in the packaged 3D view. Buffer, image and HDR payloads can be streamed beside the manifest and read when a level asks for them; glTF/GLB JSON and fonts stay inline, and the 32 MiB payload budget is unchanged. The acceptance smoke removes the source and font directories, then checks WebGL presentation, packaged font registration, drawn overlay text, a played embedded cue and a path-free provenance record. check:player-exe-evidence scores a clean-machine unpacked EXE record covering WebGL, Stop, the packaged font, overlay text, the embedded cue, path-free provenance, a level transition and a streamed payload. No such record is in the repo, and exit 2 with no file is the open manual gate rather than a pass. Signatures, publisher identity, world-partition streaming and the complete F1 gate remain open.",
+      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/PackageProfile.ts", "src/runtime/RuntimeAudio.ts", "src/runtime/GamePackage.ts", "src/core/runtime/Gameplay3D.ts", "src/electron/GamePackageExport.ts", "src/player3d/packageFonts.ts", "src/player3d/packageStream.js", "src/player3d/textOverlay.ts", "src/player3d/PlayerHost3D.ts", "scripts/package-game.js", "scripts/playerExeEvidence.js", "scripts/check-player-exe-evidence.js", "scripts/smoke-player.js", "scripts/smoke-player-acceptance.js", "scripts/smoke-player-startup.js", "package.json"]
     },
     {
       "id": "PHYSICS-001",

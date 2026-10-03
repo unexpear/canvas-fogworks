@@ -1,7 +1,8 @@
-/** @module desktopWindow @description Sandboxed game window with only a bounded progress slot; no editor, network or arbitrary filesystem authority. */
+/** @module desktopWindow @description Sandboxed game window with a bounded progress slot and declared package-stream reads; no editor, network or arbitrary filesystem authority. */
 const { app, BrowserWindow, session, ipcMain } = require("electron");
 const fs = require("fs"), path = require("path");
 const { createProgressFile, saveMigrationsFromHtml } = require("./progressFile");
+const { createPackageStreamReader, streamCatalogFromHtml } = require("./packageStream");
 const { pathToFileURL } = require("url");
 const { randomUUID } = require("crypto");
 
@@ -11,10 +12,11 @@ function installProgressHandlers() {
     const slot = event => {
         const value = progressWindows.get(event.sender.id);
         if (!value || event.senderFrame !== event.sender.mainFrame || event.sender.getURL() !== value.url) throw new Error("Unapproved progress sender.");
-        return value.store;
+        return value;
     };
-    ipcMain.handle("fogworks-progress-read", event => slot(event).read());
-    ipcMain.handle("fogworks-progress-write", (event, content) => slot(event).write(content));
+    ipcMain.handle("fogworks-progress-read", event => slot(event).store.read());
+    ipcMain.handle("fogworks-progress-write", (event, content) => slot(event).store.write(content));
+    ipcMain.handle("fogworks-stream-read", (event, id) => slot(event).streams.read(id));
 }
 async function createGameWindow(html, { show = true, progressPreload = path.join(__dirname, "progressPreload.js") } = {}) {
     const allowed = pathToFileURL(html).href;
@@ -35,9 +37,10 @@ async function createGameWindow(html, { show = true, progressPreload = path.join
     let fromGameIds;
     try { fromGameIds = saveMigrationsFromHtml(header, gameId).map(item => item.fromGameId); }
     catch (error) { win.destroy(); throw error; }
+    const streams = createPackageStreamReader(path.join(path.dirname(html), "streams"), streamCatalogFromHtml(header));
     installProgressHandlers();
     const windowId = win.webContents.id;
-    progressWindows.set(windowId, { url: allowed, store: createProgressFile(path.join(app.getPath("userData"), "player-progress"), gameId, { fromGameIds }) });
+    progressWindows.set(windowId, { url: allowed, store: createProgressFile(path.join(app.getPath("userData"), "player-progress"), gameId, { fromGameIds }), streams });
     win.on("closed", () => progressWindows.delete(windowId));
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", event => event.preventDefault());

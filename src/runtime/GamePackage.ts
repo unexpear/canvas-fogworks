@@ -1,6 +1,8 @@
 /**
  * @module GamePackage
- * @description Bounded inline game manifest and read-only allowlisted player host; no filesystem or network access.
+ * @description Bounded game manifest and read-only allowlisted player host.
+ * Inline payloads stay in the manifest. Buffer, image and HDR payloads can be read from a stream source when a level uses them.
+ * The host supplies those bytes; this module performs no filesystem or network access.
  */
 
 import { FONT_FAMILY_MAX } from "../core/document/Node";
@@ -18,8 +20,12 @@ export const GAME_PACKAGE_LIMITS = Object.freeze({ jsonBytes: 64 * 1024 * 1024,
     levelBytes: 20_000_000, fileBytes: 16 * 1024 * 1024, assetBytes: 32 * 1024 * 1024,
     levels: 32, files: 4096, resources: 4096 });
 export type PackageFileKind = "gltf" | "glb" | "hdr" | "buffer" | "image" | "font";
+export type PackageStreamKind = "hdr" | "buffer" | "image";
 export interface PackageFile { id: string; kind: PackageFileKind; bytes: number; data: string }
+export interface PackageStreamFile { id: string; kind: PackageStreamKind; bytes: number; sha256: string }
+export type PackagePayloadFile = PackageFile | PackageStreamFile;
 export interface PackageFont { family: string; weight: number; italic: boolean; file: string }
+export interface PackageStreamSource { read(id: string): Promise<Uint8Array> }
 export interface PackagedFontFace { family: string; weight: number; italic: boolean; data: string }
 export interface PackageLevel {
     id: string;
@@ -44,7 +50,23 @@ export interface PackagedGameReader extends PlayerProjectReader {
     readonly warnings: readonly PackageDiagnostic[];
     readonly saveMigrations: readonly SaveBuildMigration[];
 }
-interface ValidLevel { content: string; links: Map<string, string>; resources: Map<string, PackageFile>; models: Set<string> }
+interface HeldFile { id: string; kind: PackageFileKind; bytes: number; data: string | null; sha256: string | null }
+interface ValidLevel { content: string; links: Map<string, string>; resources: Map<string, HeldFile>; models: Set<string> }
+const STREAM_KINDS = new Set<PackageFileKind>(["buffer", "image", "hdr"]);
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)));
+    let hex = "";
+    for (const byte of digest) hex += byte.toString(16).padStart(2, "0");
+    return hex;
+}
+function encodeBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, Math.min(bytes.length, index + 0x8000)));
+    }
+    return btoa(binary);
+}
 
 // The native writer shares exactly the reader's virtual namespace, not filesystem casing rules.
 export { localPath as packageLocalPath };
@@ -145,25 +167,43 @@ function envelope(value: unknown): Record<string, unknown> {
 const PACKAGE_KINDS = ["gltf", "glb", "hdr", "buffer", "image", "font"];
 
 /** Parse once, validate all declared references, then retain only private Maps and immutable strings. */
-export function createPackageReader(serialized: string): PackagedGameReader {
+export function createPackageReader(serialized: string, streams?: PackageStreamSource): PackagedGameReader {
     const raw = envelope(JSON.parse(text(serialized, GAME_PACKAGE_LIMITS.jsonBytes)));
     if (raw.format !== "canvas-fogworks-game" || raw.version !== 1) throw new Error("Unsupported game package format/version.");
     const capabilities = list(raw.requiredCapabilities, 16);
     if (capabilities.length !== 1 || capabilities[0] !== "spatial3d-v1") throw new Error("Unsupported game package capabilities.");
-    const entry = id(raw.entry), files = new Map<string, PackageFile>(), modelJson = new Map<string, unknown>();
+    const entry = id(raw.entry), files = new Map<string, HeldFile>(), modelJson = new Map<string, unknown>();
     let totalBytes = 0, totalResources = 0;
     for (const value of list(raw.files, GAME_PACKAGE_LIMITS.files)) {
-        const file = record(value, ["id", "kind", "bytes", "data"]), key = id(file.id);
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid package record.");
+        const result = value as Record<string, unknown>;
+        const keys = Object.keys(result);
+        const inline = keys.length === 4 && ["id", "kind", "bytes", "data"].every(field => Object.prototype.hasOwnProperty.call(result, field));
+        const streamed = keys.length === 4 && ["id", "kind", "bytes", "sha256"].every(field => Object.prototype.hasOwnProperty.call(result, field));
+        if (!inline && !streamed) throw new Error("Invalid or unsupported package fields.");
+        const key = id(result.id);
         if (files.has(key)) throw new Error("Duplicate package file ID.");
-        if (!PACKAGE_KINDS.includes(String(file.kind))) throw new Error("Unsupported package file kind.");
-        if (!Number.isSafeInteger(file.bytes) || (file.bytes as number) < 0 || (file.bytes as number) > GAME_PACKAGE_LIMITS.fileBytes
-            || totalBytes + (file.bytes as number) > GAME_PACKAGE_LIMITS.assetBytes) throw new Error("Package asset byte limit exceeded.");
-        const payload = binary(file.data, Math.min(GAME_PACKAGE_LIMITS.fileBytes, GAME_PACKAGE_LIMITS.assetBytes - totalBytes));
-        if (payload.bytes.length !== file.bytes) throw new Error("Package file byte count mismatch.");
+        if (!PACKAGE_KINDS.includes(String(result.kind))) throw new Error("Unsupported package file kind.");
+        const kind = result.kind as PackageFileKind;
+        const declared = result.bytes;
+        if (!Number.isSafeInteger(declared) || (declared as number) < 0 || (declared as number) > GAME_PACKAGE_LIMITS.fileBytes
+            || totalBytes + (declared as number) > GAME_PACKAGE_LIMITS.assetBytes) throw new Error("Package asset byte limit exceeded.");
+        if (streamed) {
+            if (!STREAM_KINDS.has(kind)) throw new Error("Only buffer, image and hdr payloads can stream.");
+            if (typeof result.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(result.sha256)) throw new Error("Invalid package stream hash.");
+            totalBytes += declared as number;
+            files.set(key, { id: key, kind, bytes: declared as number, data: null, sha256: result.sha256 });
+            continue;
+        }
+        const payload = binary(result.data, Math.min(GAME_PACKAGE_LIMITS.fileBytes, GAME_PACKAGE_LIMITS.assetBytes - totalBytes));
+        if (payload.bytes.length !== declared) throw new Error("Package file byte count mismatch.");
         totalBytes += payload.bytes.length;
-        files.set(key, { id: key, kind: file.kind as PackageFileKind, bytes: payload.bytes.length, data: payload.data });
-        if (file.kind === "gltf") modelJson.set(key, JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload.bytes)));
-        if (file.kind === "glb") modelJson.set(key, parseGlb(payload.bytes).json);
+        files.set(key, { id: key, kind, bytes: payload.bytes.length, data: payload.data, sha256: null });
+        if (kind === "gltf") modelJson.set(key, JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(payload.bytes)));
+        if (kind === "glb") modelJson.set(key, parseGlb(payload.bytes).json);
+    }
+    if ([...files.values()].some(file => file.data === null) && typeof streams?.read !== "function") {
+        throw new Error("Package stream source is required.");
     }
     const publishedFonts: PackagedFontFace[] = [];
     const packagedFamilies = new Set<string>(), usedFontFiles = new Set<string>();
@@ -177,7 +217,7 @@ export function createPackageReader(serialized: string): PackagedGameReader {
                 throw new Error("Invalid packaged font face.");
             }
             const fileId = id(font.file), file = files.get(fileId);
-            if (!file || file.kind !== "font") throw new Error("Packaged font file is missing or the wrong kind.");
+            if (!file || file.kind !== "font" || file.data === null) throw new Error("Packaged font file is missing or the wrong kind.");
             if (usedFontFiles.has(fileId)) throw new Error("Duplicate packaged font file.");
             const faceKey = `${normalizeFontFamily(family)}\0${font.weight}\0${font.italic}`;
             if (seenFaces.has(faceKey)) throw new Error("Duplicate packaged font face.");
@@ -197,7 +237,7 @@ export function createPackageReader(serialized: string): PackagedGameReader {
         const content = text(level.content, GAME_PACKAGE_LIMITS.levelBytes), doc = deserializeDocument(content);
         if (![...doc.nodes.values()].some(node => node.spatial3d?.camera)) throw new Error("Package level requires a 3D camera.");
         validateImages(content, diagnostics);
-        const links = new Map<string, string>(), resources = new Map<string, PackageFile>(), models = new Set<string>();
+        const links = new Map<string, string>(), resources = new Map<string, HeldFile>(), models = new Set<string>();
         for (const value of list(level.links, 32)) {
             const link = record(value, ["target", "level"]), target = localPath(link.target);
             if (links.has(target)) throw new Error("Duplicate or case-aliased package link.");
@@ -211,7 +251,7 @@ export function createPackageReader(serialized: string): PackagedGameReader {
             resources.set(source, file);
         }
         const needed = new Set<string>(), targets = new Set<string>();
-        const requireResource = (source: string, kinds: PackageFileKind[]): PackageFile => {
+        const requireResource = (source: string, kinds: PackageFileKind[]): HeldFile => {
             const file = resources.get(source);
             if (!file || !kinds.includes(file.kind)) throw new Error(`Missing or wrong-kind package resource: ${source}`);
             needed.add(source); usedFiles.add(file.id); return file;
@@ -294,10 +334,17 @@ export function createPackageReader(serialized: string): PackagedGameReader {
     const level = (key: string): ValidLevel => {
         const found = levels.get(key); if (!found) throw new Error("Unknown package level key."); return found;
     };
-    const resource = (key: string, source: string, kinds: PackageFileKind[]): string => {
+    const payload = async (file: HeldFile): Promise<string> => {
+        if (file.data !== null) return file.data;
+        const bytes = await streams!.read(file.id);
+        if (!(bytes instanceof Uint8Array) || bytes.length !== file.bytes) throw new Error("Package stream length mismatch.");
+        if (await sha256Hex(bytes) !== file.sha256) throw new Error("Package stream hash mismatch.");
+        return encodeBase64(new Uint8Array(bytes));
+    };
+    const resource = async (key: string, source: string, kinds: PackageFileKind[]): Promise<string> => {
         const file = level(key).resources.get(source);
         if (!file || !kinds.includes(file.kind)) throw new Error("Resource is not allowed by this package level.");
-        return file.data;
+        return payload(file);
     };
     const warningList = Object.freeze(warnings.map(item => Object.freeze({ ...item })));
     const fontList = Object.freeze(publishedFonts.map(font => Object.freeze({ ...font })));

@@ -2,7 +2,9 @@
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
 <!-- re-read 2026-10-02: progress adoption does not change meshes, lighting, collision or import.
-     Clean-machine EXE certification remains open. -->
+     The packaged 3D player plays embedded sound cues, draws screen-space text and can stream
+     buffer/image/HDR chunks. Meshes, lighting, collision and import behavior are unchanged.
+     A recorded clean-machine EXE pass remains open. -->
 <!-- re-read 2026-09-28: runtime now stores named keyboard bindings for play. The packaged 3D
      player plays embedded sound cues and draws screen-space text. Meshes, lighting, collision
      and import behavior are unchanged. Clean-machine EXE certification remains open. -->
@@ -145,8 +147,9 @@ physics backend, dynamic-body impulses and production character control remain l
 Read-only level and asset hydration now lives in `src/runtime`, independent of editor Actions,
 with compatibility exports preserving existing editor callers. The subsequent standalone-player
 work adds a bounded package export, event/render host, unsigned Windows unpacked executable,
-embedded sound cues and screen-space text over the 3D view. Separate clean-machine EXE certification
-remains open. See [Shared player runtime](PLAYER-RUNTIME.md) and
+embedded sound cues and screen-space text over the 3D view. Buffer, image and HDR chunks can stream
+on demand, and `check:player-exe-evidence` scores a clean-machine record without launching or
+signing the EXE. A recorded clean-machine pass remains open. See [Shared player runtime](PLAYER-RUNTIME.md) and
 [Standalone player](STANDALONE-PLAYER.md).
 
 ### 3D-4 — production renderer

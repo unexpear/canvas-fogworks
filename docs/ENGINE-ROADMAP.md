@@ -3,7 +3,11 @@
 <!-- describes: src/core/document, src/core/runtime, src/core/export, src/core/script, src/runtime, src/renderer, src/app/RuntimeAudio.ts, package.json -->
 <!-- re-read 2026-10-02: player progress can adopt an explicitly listed previous content hash.
      package.json records test:progress-crash. Prefabs and the editor migration control remain open.
-     ENG-06 gamepad, touch and runtime-UI acceptance remain open. -->
+     spatial3d-v1 can stream buffer/image/HDR chunks and scores a clean-machine EXE record with
+     check:player-exe-evidence. No clean-machine result or signature is recorded.
+     ENG-06 gamepad, touch and runtime-UI acceptance remain open. World-partition streaming and the
+     F1 gate remain open. package.json records benchmark:authoring, benchmark:gpu and
+     test:benchmark-budgets. ENG-16 benchmarks remain informational. -->
 <!-- re-read 2026-09-28: named-input Controls panels persist version-1 keyboard bindings for editor
      Play and both players. spatial3d-v1 now plays embedded cues and draws screen-space text in the
      packaged player. ENG-06 gamepad, touch and runtime-UI acceptance remain open. Clean-machine EXE
@@ -25,8 +29,9 @@ and read-only resolver; see [Game package v1](GAME-PACKAGE.md). The subsequent Q
 package export, an embedded-payload checksum, a real event/render host and an unsigned Windows
 unpacked build; see [Standalone player](STANDALONE-PLAYER.md). Clean-profile acceptance, custom font
 packaging, unsupported-feature diagnostics and unsigned provenance are now part of that player.
-Separate Windows clean-machine EXE certification, signatures and broader runtime coverage remain open.
-See PLAYER-RUNTIME.md for scoped verification evidence.
+Buffer, image and HDR payload streaming, packaged level-transition coverage and
+`check:player-exe-evidence` are in place. A recorded clean-machine EXE pass, signatures and
+world-partition streaming remain open. See PLAYER-RUNTIME.md for scoped verification evidence.
 
 Q06 follow-up 2026-09-12: schema 79 adds reusable named input actions, nearest-target interaction,
 bounded leaf-template spawning/despawning, checkpoints/respawn and versioned current-level progress
@@ -95,7 +100,7 @@ The former Morphic engine remains a preserved reference, not a second production
 | Imported glTF TRS and morph animation, CPU skinning, 16-joint GPU skinning and two-pose blending | Not full animation graphs, events, root motion or character production tools |
 | 2D/3D gameplay rules, interactions, bounded spawning, checkpoints and current-level progress | Not a general behavior lifecycle, full prefab system, production physics or multiplayer |
 | Dependency-aware Save As, recovery checkpoints, browser restore, desktop crash/relaunch, dependency-folder rollback, directory fsync when the platform allows it, and stale atomic-temp cleanup | Power-loss durability is not guaranteed. A killed copy is repaired from its journal on the next cross-folder Save As. Process-kill tests do not prove a power loss |
-| Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Clean-profile acceptance, custom fonts, unsigned provenance, embedded cues and screen-space text; separate Windows clean-machine certification and broader runtime coverage remain open |
+| Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Clean-profile acceptance, custom fonts, unsigned provenance, embedded cues, screen-space text, streamed buffer/image/HDR chunks and an EXE evidence checker; a recorded clean-machine pass and signatures remain open |
 | Tests, Electron smokes and CPU/GPU benchmarks | Hardware-specific, bounded fixtures; not a broad compatibility or scalability certification |
 
 Evidence starting points:
@@ -185,8 +190,9 @@ explicitly called the full gate. Every slice also obeys section 7's common defin
 ### ENG-01 — Standalone runtime and game distribution
 
 **State:** partial; 2D/3D HTML export, editor packaging, an unsigned Windows standalone 3D unpacked
-build, custom font embedding, profile diagnostics, unsigned provenance and a clean-profile
-acceptance smoke exist. Separate Windows clean-machine certification and signatures remain open;
+build, custom font embedding, profile diagnostics, unsigned provenance, a clean-profile
+acceptance smoke, on-demand buffer/image/HDR chunks and `check:player-exe-evidence` exist. The
+checker does not record a clean-machine pass. Signatures and world-partition streaming remain open;
 see [Standalone player](STANDALONE-PLAYER.md).
 **Phases:** F1, then F4/F6. **Role:** runtime/release engineering.
 

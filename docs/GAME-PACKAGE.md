@@ -1,7 +1,8 @@
 # Inline game package v1 — manifest and read-only resolver
 
 <!-- describes: src/runtime/GamePackage.ts, src/runtime/PackageProfile.ts, src/runtime/GamePackage.test.ts, src/runtime/RuntimeBoundary.test.ts, scripts/smoke-level-transition.js -->
-<!-- re-read 2026-10-02: optional saveMigrations names previous content hashes. Package version stays 1. The rest of this manifest is unchanged. -->
+<!-- re-read 2026-10-02: optional saveMigrations names previous content hashes. Package version stays 1.
+     buffer, image and HDR files may be streamed by hash; models and fonts stay inline. -->
 
 Implemented 2026-09-12 as the bounded Q03 format/resolver slice of the
 [engine roadmap](ENGINE-ROADMAP.md). This is a new runtime package format, separate from
@@ -34,7 +35,7 @@ Unknown fields are refused in the v1 envelope and its level/link/resource/file r
 | `entry` | ID of the sole allowed initial entry level |
 | `requiredCapabilities` | Exactly `["spatial3d-v1"]` in this implementation |
 | `levels` | Array of `{ id, content, links, resources }` |
-| `files` | Array of `{ id, kind, bytes, data }` |
+| `files` | Inline `{ id, kind, bytes, data }` or, for `buffer`/`image`/`hdr` only, streamed `{ id, kind, bytes, sha256 }` |
 | `fonts` | Optional array of `{ family, weight, italic, file }`. Absent means no custom faces |
 | `saveMigrations` | Optional array of `{ fromGameId, versions }`, at most eight. `fromGameId` is a previous package-content SHA-256. `versions` lists progress format versions 1–6 that this build may adopt from that hash. Absent or empty means no cross-build adoption. Package version stays 1. Older readers that refuse unknown fields reject a package that includes this array |
 
@@ -55,8 +56,12 @@ Each file contains:
 
 - `kind`: `gltf`, `glb`, `hdr`, `buffer`, `image` or `font`.
 - `bytes`: exact nonnegative decoded-byte count, within the per-file limit.
-- `data`: canonical padded standard base64; whitespace, URL-safe variants, missing padding,
-  invalid characters and nonzero unused padding bits are refused.
+- `data`: canonical padded standard base64 for an inline file. Whitespace, URL-safe variants,
+  missing padding, invalid characters and nonzero unused padding bits are refused.
+- `sha256`: lowercase hex digest of the raw bytes, used instead of `data` when a `buffer`,
+  `image` or `hdr` payload is streamed. glTF/GLB JSON and font files cannot use this form.
+  A streamed package requires a host stream source; the reader does not open files or the network
+  itself, and it does not keep the decoded chunk after the read returns.
 
 All declared levels must be reachable from the entry; cycles, including return links, are allowed.
 All declared resources and payload files must be used by the validated asset/dependency graph.
@@ -133,16 +138,17 @@ Text sizes use UTF-8 bytes, not JavaScript character counts. Nested embedded dat
 bounded by its enclosing serialized level/model and the inline decode limit. The 32 MiB payload
 sum is not a bound on total decoded scene images, GPU residency or JavaScript heap. JSON parsing,
 base64 validation, temporary byte arrays, hydrated geometry and repeated per-level uses add memory.
-Streaming and larger-content formats require a later design; do not just raise these constants.
+Declared stream sizes count toward the same 16 MiB file and 32 MiB sum limits. Moving those bytes
+out of the JSON does not raise the limits, and it is not world-partition or music streaming.
 
 Byte counts and strict encoding catch malformed/truncated payloads but are **not cryptographic
 integrity or authenticity**. A same-length malicious edit can still be structurally valid.
 The standalone HTML writer adds a SHA-256 digest over the entire embedded manifest, checked
 before play; that digest detects accidental damage and does not provide authenticity. The exporter
 also writes an unsigned provenance record (`game.provenance.json`, and the same object inside the
-HTML) listing the app version, optional source revision, manifest hash, per-file hashes, packaged
-faces and profile warnings. It contains no host paths and is not a signature. Anonymous unsigned
-distribution is retained. Trusted updates remain separate work.
+HTML) listing the app version, optional source revision, manifest hash, per-file hashes, whether
+each file is `inline` or `stream`, packaged faces and profile warnings. It contains no host paths
+and is not a signature. Anonymous unsigned distribution is retained. Trusted updates remain separate work.
 
 ## Verification and remaining work
 
@@ -164,8 +170,12 @@ Follow-up delivery: the explicit package writer/export path, dedicated event/ren
 unsigned executable packaging are implemented; see [Standalone player](STANDALONE-PLAYER.md).
 `npm run smoke:player-acceptance` is the clean-profile gate: it deletes the source project and font
 directory before launching the packaged HTML, then checks WebGL, the packaged face, drawn overlay
-text and one played embedded cue. Windows EXE certification on a separate machine,
-signatures, streaming and broader runtime coverage remain open. Do not mark F1 complete on this smoke alone.
+text and one played embedded cue. Package tests also drive a level transition that reads a streamed
+chunk and keep the current level when that chunk's hash does not match. `npm run check:player-exe-evidence`
+scores a clean-machine unpacked EXE record and writes an operator plan; with no file it exits 2,
+and that exit is not a pass. No clean-machine result is recorded here. Signatures, publisher
+identity, world-partition streaming and the complete F1 gate remain open. Do not mark F1 complete
+on this smoke alone.
 
 Encoding behavior was checked against [TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder/encode)
 and [base64 byte conversion](https://developer.mozilla.org/en-US/docs/Web/API/Window/btoa).

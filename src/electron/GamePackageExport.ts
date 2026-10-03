@@ -9,7 +9,7 @@ import { deserializeDocument } from "../core/document/Serializer";
 import { parseGlb } from "../core/import/Gltf";
 import { fontFileError, parseFontFile } from "../core/import/FontFile";
 import { createPackageReader, GAME_PACKAGE_LIMITS as LIMIT, packageLocalPath } from "../runtime/GamePackage";
-import type { GamePackageManifest, PackageFile, PackageFileKind, PackageFont, PackageLevel } from "../runtime/GamePackage";
+import type { GamePackageManifest, PackageFile, PackageFileKind, PackageFont, PackageLevel, PackagePayloadFile } from "../runtime/GamePackage";
 import { fontStackFamilies, isGenericFontFamily, normalizeFontFamily } from "../runtime/PackageProfile";
 import type { PackageDiagnostic } from "../runtime/PackageProfile";
 const { resolveConfined } = require("./confine");
@@ -55,7 +55,7 @@ export interface GameProvenance {
     sourceRevision: string | null;
     manifestSha256: string;
     authenticity: "unsigned";
-    files: { id: string; kind: PackageFileKind; bytes: number; sha256: string }[];
+    files: { id: string; kind: PackageFileKind; bytes: number; sha256: string; placement: "inline" | "stream" }[];
     fonts: { family: string; weight: number; italic: boolean; file: string; sha256: string }[];
     warnings: Pick<PackageDiagnostic, "code" | "feature" | "subject" | "detail">[];
 }
@@ -242,25 +242,58 @@ export async function collectGamePackage(project: string, liveContent: string, s
     return serialized;
 }
 
+/** Move buffer, image and HDR bytes out of the manifest. Models and fonts stay inline. */
+export function externalizePackageStreams(serialized: string): { serialized: string; chunks: { id: string; bytes: Buffer }[] } {
+    const manifest = JSON.parse(serialized) as GamePackageManifest;
+    const chunks: { id: string; bytes: Buffer }[] = [];
+    const files: PackagePayloadFile[] = manifest.files.map(file => {
+        if (file.kind === "font" || file.kind === "gltf" || file.kind === "glb") {
+            if (!("data" in file) || typeof file.data !== "string") throw new Error("Models and fonts stay inline.");
+            return file;
+        }
+        if (!("data" in file) || typeof file.data !== "string") throw new Error("Package file is already streamed.");
+        if (file.kind !== "buffer" && file.kind !== "image" && file.kind !== "hdr") throw new Error("Only buffer, image and hdr payloads can stream.");
+        const bytes = Buffer.from(file.data, "base64");
+        if (bytes.toString("base64") !== file.data || bytes.length !== file.bytes) throw new Error("Noncanonical package payload.");
+        const sha256 = createHash("sha256").update(bytes).digest("hex");
+        chunks.push({ id: file.id, bytes });
+        return { id: file.id, kind: file.kind, bytes: file.bytes, sha256 };
+    });
+    const next = JSON.stringify({ ...manifest, files });
+    const blobs = new Map(chunks.map(chunk => [chunk.id, new Uint8Array(chunk.bytes)]));
+    createPackageReader(next, chunks.length ? { async read(id: string) {
+        const found = blobs.get(id);
+        if (!found) throw new Error("Missing package stream.");
+        return found;
+    } } : undefined);
+    return { serialized: next, chunks };
+}
+
 /** Unsigned release identity. The manifest hash detects accidental damage, not a substituted publisher. */
 export function gameProvenance(serialized: string, identity: ProvenanceIdentity): GameProvenance {
     if (!/^\d+\.\d+\.\d+$/.test(identity.appVersion)) throw new Error("Invalid provenance app version.");
     if (identity.sourceRevision !== null && !/^[0-9a-f]{7,64}$/.test(identity.sourceRevision)) throw new Error("Invalid provenance revision.");
-    const reader = createPackageReader(serialized);
-    const manifest = JSON.parse(serialized) as GamePackageManifest;
+    const manifest = JSON.parse(serialized) as { files: PackagePayloadFile[]; fonts?: PackageFont[] };
+    const streamed = manifest.files.some(file => "sha256" in file);
+    const reader = createPackageReader(serialized, streamed ? { async read() { throw new Error("Provenance does not load stream bytes."); } } : undefined);
     const sha256 = (data: string) => createHash("sha256").update(Buffer.from(data, "base64")).digest("hex");
+    const fileHash = (file: PackagePayloadFile) => "sha256" in file ? file.sha256 : sha256(file.data);
     const files = new Map(manifest.files.map(file => [file.id, file]));
     return { format: "canvas-fogworks-game-provenance", version: 1, profile: "spatial3d-v1",
         packageFormat: "canvas-fogworks-game", packageVersion: 1, appVersion: identity.appVersion,
         sourceRevision: identity.sourceRevision, manifestSha256: createHash("sha256").update(serialized).digest("hex"),
         authenticity: "unsigned",
-        files: manifest.files.map(file => ({ id: file.id, kind: file.kind, bytes: file.bytes, sha256: sha256(file.data) })),
-        fonts: (manifest.fonts ?? []).map(font => ({ family: font.family, weight: font.weight, italic: font.italic, file: font.file,
-            sha256: sha256(files.get(font.file)!.data) })),
+        files: manifest.files.map(file => ({ id: file.id, kind: file.kind, bytes: file.bytes, sha256: fileHash(file),
+            placement: "sha256" in file ? "stream" as const : "inline" as const })),
+        fonts: (manifest.fonts ?? []).map(font => {
+            const payload = files.get(font.file);
+            if (!payload || !("data" in payload)) throw new Error("Packaged font file is missing or streamed.");
+            return { family: font.family, weight: font.weight, italic: font.italic, file: font.file, sha256: sha256(payload.data) };
+        }),
         warnings: reader.warnings.map(warning => ({ code: warning.code, feature: warning.feature, subject: warning.subject, detail: warning.detail })) };
 }
 
-/** A self-contained artifact. The digest detects accidental payload damage, not malicious replacement. */
+/** Player HTML. Inline payloads are embedded. Streamed buffer, image and HDR bytes stay in sibling chunk files for the desktop host. The digest detects accidental manifest damage, not a signature. */
 export function game3DHtml(serialized: string, bundle: Buffer, provenance?: GameProvenance): string {
     const identity = provenance ?? gameProvenance(serialized, { appVersion: "0.0.5", sourceRevision: null });
     if (identity.manifestSha256 !== createHash("sha256").update(serialized).digest("hex")) throw new Error("Provenance does not match this package.");

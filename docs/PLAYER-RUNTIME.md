@@ -159,4 +159,7 @@ event/render host, a payload checksum and Q05's unsigned Windows unpacked build.
 host has no editor authority; the editor gains a separate export endpoint. No new dependencies
 or native backend were introduced. The packaged player now plays embedded sound cues and draws
 screen-space 2D text over the 3D view. Clean-profile acceptance is `smoke:player-acceptance`.
-A separate Windows clean-machine EXE certification, streaming and the complete F1 gate remain open.
+Buffer, image and HDR bytes can stream from a host-supplied chunk when a level reads them; models
+and fonts stay inline. `check:player-exe-evidence` is the clean-machine EXE scoring path. No
+clean-machine result is recorded, signatures are omitted, and world-partition streaming and the
+complete F1 gate remain open.

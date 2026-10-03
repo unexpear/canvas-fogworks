@@ -12,7 +12,15 @@ async function boot() {
     const bytes = Uint8Array.from(atob(data), char => char.charCodeAt(0));
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     if ([...digest].map(byte => byte.toString(16).padStart(2, "0")).join("") !== expected) throw new Error("Package integrity check failed.");
-    const host = createPackageReader(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const streamBridge = (window as Window & { playerStreams?: { read(id: string): Promise<string> } }).playerStreams;
+    const host = createPackageReader(new TextDecoder("utf-8", { fatal: true }).decode(bytes), streamBridge ? {
+        async read(id: string) {
+            const encoded = await streamBridge.read(id);
+            if (typeof encoded !== "string") throw new Error("Invalid package stream.");
+            const binary = atob(encoded);
+            return Uint8Array.from(binary, char => char.charCodeAt(0));
+        }
+    } : undefined);
     await installPackagedFonts(host.fonts);
     const diagnostics = document.getElementById("diagnostics");
     if (diagnostics && host.warnings.length) {

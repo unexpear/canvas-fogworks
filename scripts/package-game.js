@@ -21,10 +21,22 @@ async function packageGame(project, destination, desktopOrOptions = false) {
     const collector = path.join(output, "collector.cjs");
     await build({ entryPoints: [path.join(root, "src/electron/GamePackageExport.ts")], bundle: true,
         platform: "node", format: "cjs", target: "node22", outfile: collector });
-    const { collectGamePackage, game3DHtml, gameProvenance } = require(collector);
+    const { collectGamePackage, externalizePackageStreams, game3DHtml, gameProvenance } = require(collector);
     const file = fs.realpathSync.native(project);
     if (fs.statSync(file).size > 20_000_000) throw new Error("Entry project exceeds 20MB.");
-    const serialized = await collectGamePackage(file, fs.readFileSync(file, "utf8"), { fontsDirectory: options.fontsDirectory });
+    let serialized = await collectGamePackage(file, fs.readFileSync(file, "utf8"), { fontsDirectory: options.fontsDirectory });
+    if (options.stream) {
+        const split = externalizePackageStreams(serialized);
+        serialized = split.serialized;
+        if (split.chunks.length) {
+            const chunks = path.join(stage, "streams");
+            fs.mkdirSync(chunks);
+            for (const chunk of split.chunks) {
+                if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(chunk.id)) throw new Error("Invalid package stream id.");
+                fs.writeFileSync(path.join(chunks, `${chunk.id}.bin`), chunk.bytes, { flag: "wx" });
+            }
+        }
+    }
     const player = await build({ entryPoints: [path.join(root, "src/player3d/index.ts")], bundle: true,
         platform: "browser", format: "iife", target: "es2020", minify: true, write: false });
     const provenance = gameProvenance(serialized, { appVersion: require(path.join(root, "package.json")).version, sourceRevision: sourceRevision(root) });
@@ -45,17 +57,18 @@ async function packageGame(project, destination, desktopOrOptions = false) {
         await pack({ projectDir: stage, targets: Platform.WINDOWS.createTarget("dir"), publish: "never",
             config: { extends: null, appId: "com.canvasfogworks.game", productName: "Canvas Fogworks Game",
                 electronVersion: require("electron/package.json").version, asar: true, npmRebuild: false,
-                directories: { output: path.join(output, "desktop") }, files: ["main.cjs", "progressPreload.js", "game.html", "package.json"],
+                directories: { output: path.join(output, "desktop") }, files: ["main.cjs", "progressPreload.js", "game.html", "package.json", "streams/**/*"],
                 win: { signAndEditExecutable: false }, forceCodeSigning: false } });
     }
     console.log(`Game output: ${output}`);
     return output;
 }
 function parsePackageArgs(argv) {
-    let project, destination, desktop = false, fontsDirectory;
+    let project, destination, desktop = false, stream = false, fontsDirectory;
     for (let index = 0; index < argv.length; index++) {
         const arg = argv[index];
         if (arg === "--desktop") desktop = true;
+        else if (arg === "--stream") stream = true;
         else if (arg === "--fonts") {
             fontsDirectory = argv[++index];
             if (!fontsDirectory || fontsDirectory.startsWith("--")) throw new Error("Missing font directory.");
@@ -65,14 +78,14 @@ function parsePackageArgs(argv) {
         else throw new Error("Too many arguments.");
     }
     if (!project || !destination) throw new Error("Missing project or output directory.");
-    return { project, destination, desktop, fontsDirectory };
+    return { project, destination, desktop, stream, fontsDirectory };
 }
 if (require.main === module) {
     try {
         const options = parsePackageArgs(process.argv.slice(2));
         packageGame(options.project, options.destination, options).catch(error => { console.error(error); process.exitCode = 1; });
     } catch (error) {
-        console.error(`${error.message}\nUsage: npm run package:game -- "entry.vde" "NEW output directory" [--desktop] [--fonts directory]`);
+        console.error(`${error.message}\nUsage: npm run package:game -- "entry.vde" "NEW output directory" [--desktop] [--stream] [--fonts directory]`);
         process.exitCode = 1;
     }
 }

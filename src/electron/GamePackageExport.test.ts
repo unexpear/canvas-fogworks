@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSy
 import { tmpdir } from "os";
 import { resolve, join } from "path";
 import { createHash } from "crypto";
-import { collectGamePackage, fontPayloadsFromJson, game3DHtml, gameProvenance } from "./GamePackageExport";
+import { collectGamePackage, externalizePackageStreams, fontPayloadsFromJson, game3DHtml, gameProvenance } from "./GamePackageExport";
 const { ownedTestFont } = require("../../scripts/owned-test-font");
 import { createPackageReader, GAME_PACKAGE_LIMITS } from "../runtime/GamePackage";
 import { PlayerSession3D } from "../runtime/PlayerSession3D";
@@ -157,6 +157,71 @@ test("export stamps a non-empty save migration table and the packaged HTML expos
     expect(JSON.parse(await collect()).saveMigrations).toBeUndefined();
     await expect(collectGamePackage(project, JSON.stringify(raw), { saveMigrations: [{ fromGameId: "nope", versions: [5] }] })).rejects.toThrow(/build id/);
 });
+test("buffer image and hdr chunks leave the manifest while fonts and models stay inline", async () => {
+    const fonts = join(temp, "fonts"); mkdirSync(fonts);
+    writeFileSync(join(fonts, "owned.ttf"), ownedTestFont("Owned Face"));
+    raw.document.nodes.label = { id: "label", type: "core.text", parent: null, children: [],
+        geometry: { x: 0, y: 0, width: 120, height: 24 }, style: { fill: "#ffffff", opacity: 1, fontFamily: "Owned Face, sans-serif" },
+        layout: {}, text: "Hello" };
+    raw.document.rootNodeUuids.push("label");
+    const serialized = await collectGamePackage(project, JSON.stringify(raw), { fontsDirectory: fonts });
+    const split = externalizePackageStreams(serialized);
+    const manifest = JSON.parse(split.serialized);
+    const font = manifest.files.find((file: { kind: string }) => file.kind === "font");
+    const model = manifest.files.find((file: { kind: string }) => file.kind === "gltf" || file.kind === "glb");
+    const buffer = manifest.files.find((file: { kind: string }) => file.kind === "buffer");
+    expect(typeof font.data).toBe("string");
+    expect(typeof model.data).toBe("string");
+    expect(buffer.data).toBeUndefined();
+    expect(buffer.sha256).toHaveLength(64);
+    expect(split.chunks.map(chunk => chunk.id).sort()).toEqual(manifest.files.filter((file: { sha256?: string }) => file.sha256).map((file: { id: string }) => file.id).sort());
+    expect(split.serialized).not.toContain(Buffer.from(split.chunks[0].bytes).toString("base64"));
+    const streams = join(temp, "streams"); mkdirSync(streams);
+    for (const chunk of split.chunks) writeFileSync(join(streams, `${chunk.id}.bin`), chunk.bytes);
+    const html = game3DHtml(split.serialized, Buffer.from("/* owned player */"));
+    const { createPackageStreamReader, streamCatalogFromHtml } = require("../player3d/packageStream");
+    const disk = createPackageStreamReader(streams, streamCatalogFromHtml(html));
+    const host = createPackageReader(split.serialized, { async read(id: string) {
+        return Uint8Array.from(Buffer.from(await disk.read(id), "base64"));
+    } });
+    const session = new PlayerSession3D(host, host.entryKey);
+    await session.start();
+    expect(session.frame(320, 240)!.draws.length).toBeGreaterThan(0);
+    expect(host.fonts.map(face => face.family)).toEqual(["Owned Face"]);
+    const provenance = gameProvenance(split.serialized, { appVersion: "0.0.5", sourceRevision: null });
+    expect(provenance.authenticity).toBe("unsigned");
+    expect(provenance.files.find(file => file.id === buffer.id)!.placement).toBe("stream");
+    expect(provenance.files.find(file => file.id === font.id)!.placement).toBe("inline");
+    expect(JSON.stringify(provenance)).not.toContain(temp);
+    expect(html).toContain(buffer.sha256);
+}, 60000);
+test("package:game --stream writes chunk files beside the player without signing", async () => {
+    const { packageGame } = require("../../scripts/package-game");
+    const destination = join(temp, "streamed-game");
+    await packageGame(project, destination, { stream: true });
+    const manifest = JSON.parse(readFileSync(join(destination, "game.cfgame.json"), "utf8"));
+    const buffer = manifest.files.find((file: { kind: string }) => file.kind === "buffer");
+    const chunk = readFileSync(join(destination, "app", "streams", `${buffer.id}.bin`));
+    expect(buffer.data).toBeUndefined();
+    expect(createHash("sha256").update(chunk).digest("hex")).toBe(buffer.sha256);
+    const html = readFileSync(join(destination, "app", "game.html"), "utf8");
+    expect(html).not.toContain(chunk.toString("base64"));
+    const provenance = JSON.parse(readFileSync(join(destination, "game.provenance.json"), "utf8"));
+    expect(provenance.authenticity).toBe("unsigned");
+    expect(provenance.files.find((file: { id: string }) => file.id === buffer.id).placement).toBe("stream");
+    const present = ["app/game.html", "app/main.cjs", "app/package.json", "app/progressPreload.js", "game.cfgame.json", "game.provenance.json",
+        ...manifest.files.filter((file: { sha256?: string }) => file.sha256).map((file: { id: string }) => `app/streams/${file.id}.bin`)];
+    const found: string[] = [];
+    const walk = (directory: string) => {
+        for (const entry of require("fs").readdirSync(directory, { withFileTypes: true })) {
+            const full = join(directory, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else found.push(full.slice(destination.length + 1).replace(/\\/g, "/"));
+        }
+    };
+    walk(destination);
+    expect(found.sort()).toEqual(present.sort());
+}, 60000);
 test("HTML keeps untrusted document text out of markup and binds the UTF8 payload digest", async () => {
     raw.document.nodes.triangle.userData = { note: { type: "string", value: "</script><script>alert('bad')</script> café" } };
     const serialized = await collect(), html = game3DHtml(serialized, Buffer.from("/* owned player */"));
