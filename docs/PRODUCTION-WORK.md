@@ -84,6 +84,8 @@ A separate offline [installer lifecycle harness](INSTALLER-TESTING.md) passed th
 
 On 2026-09-28 the repository gained `check:installer-evidence` and a staged `OPERATOR.txt` plan so a Windows host can record pass/fail artifacts for that extended guest and for a separate host hardware-GPU draw. The change was made where Windows Sandbox and a hardware GPU are unavailable. No new Sandbox `result.json` and no host `hardware-gpu.json` were produced. Exit 2 from the checker, with no files supplied, is the recorded state of that manual gate.
 
+On 2026-10-02 the guest result writer was moved onto the staged Node binary so a finished Windows run emits the same JSON shape the checker scores, and the guest refuses `status: passed` unless that file already meets the guest half of the contract. Assisted clicks try UI Automation invoke or selection before a raw button message. Per-machine phases fail closed when the guest is not elevated. Named NVIDIA, AMD, and Intel adapter strings classify as hardware when they do not contain a software-renderer token. No Sandbox was launched and no `hardware-gpu.json` was recorded. Exit 2 with no files is still the open manual gate.
+
 ## Release budget calibration — SCALE-001
 
 Recorded 2026-09-28. The prior host is the September 7 Windows x64 / Node 24.15.0 / Intel Iris Xe sample already in this document. The new host is Linux x64, Node 22.14.0, 4 vCPU Intel Xeon, 16 GiB, with `node --expose-gc`. CPU and GPU runs are separate. Do not add their p95 values or read them as an end-to-end frame rate.

@@ -20,9 +20,48 @@ $result = [ordered]@{
     historicalReleaseInstaller = $false; hardwareGpuValidation = 'not-certified-by-software-sandbox'
     publisherMetadata = $false; signing = $false
 }
-function Write-Result {
-    # .NET Framework WriteAllText is UTF-8 without a BOM. Set-Content -Encoding UTF8 is not.
-    [System.IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json -Depth 6))
+$script:fieldPath = 'C:\FogworksResults\result.fields.txt'
+function Add-EvidenceLine([System.Collections.Generic.List[string]]$lines, [string]$name, [string]$value) {
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($value))
+    $lines.Add("$name $encoded")
+}
+function Test-Elevated {
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function Write-Result([switch]$RequireAcceptable) {
+    # Field lines are ASCII. The staged Node writer emits the canonical JSON the checker reads.
+    $lines = [System.Collections.Generic.List[string]]::new()
+    Add-EvidenceLine $lines 'status' ([string]$result.status)
+    Add-EvidenceLine $lines 'evidenceKind' ([string]$result.evidenceKind)
+    Add-EvidenceLine $lines 'virtualGpu' ([string]$result.virtualGpu)
+    Add-EvidenceLine $lines 'hardwareGpuValidation' ([string]$result.hardwareGpuValidation)
+    if ($result.Contains('installerSha256') -and $result['installerSha256']) {
+        Add-EvidenceLine $lines 'installerSha256' ([string]$result['installerSha256'])
+    }
+    $lines.Add("syntheticBaseline $(if ($result.syntheticBaseline) { 'true' } else { 'false' })")
+    $lines.Add("historicalReleaseInstaller $(if ($result.historicalReleaseInstaller) { 'true' } else { 'false' })")
+    $lines.Add("publisherMetadata $(if ($result.publisherMetadata) { 'true' } else { 'false' })")
+    $lines.Add("signing $(if ($result.signing) { 'true' } else { 'false' })")
+    foreach ($id in @($completed.ToArray())) { Add-EvidenceLine $lines 'completed' ([string]$id) }
+    foreach ($message in @($steps.ToArray())) { Add-EvidenceLine $lines 'step' ([string]$message) }
+    if ($null -eq $result.error -or $result.error -eq '') { $lines.Add('error ~') }
+    else { Add-EvidenceLine $lines 'error' ([string]$result.error) }
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllLines($script:fieldPath, $lines.ToArray(), $utf8)
+    $writerOut = 'C:\FogworksResults\evidence-writer.stdout.log'
+    $writerErr = 'C:\FogworksResults\evidence-writer.stderr.log'
+    Remove-Item -LiteralPath $writerOut, $writerErr -ErrorAction SilentlyContinue
+    $nodeArgs = 'C:\FogworksInput\scripts\normalize-guest-result.js --fields C:\FogworksResults\result.fields.txt --out C:\FogworksResults\result.json'
+    if ($RequireAcceptable) { $nodeArgs += ' --require-acceptable' }
+    $writer = Start-Process -FilePath 'C:\FogworksInput\node.exe' -ArgumentList $nodeArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $writerOut -RedirectStandardError $writerErr
+    $null = $writer.Handle
+    if (-not $writer.WaitForExit(60000)) { throw 'Guest evidence writer timed out.' }
+    if ($writer.ExitCode -ne 0) {
+        $detail = ''
+        if (Test-Path -LiteralPath $writerErr) { $detail = Get-Content -LiteralPath $writerErr -Raw }
+        throw "Guest evidence file was rejected. $detail"
+    }
 }
 function Record-Step([string]$message) {
     $steps.Add($message)
@@ -101,8 +140,8 @@ function Assert-Preserved {
     }
 }
 function Smoke-Workflow([string]$label, [string]$exe) {
-    $stdout = "C:\FogworksResults\$label.stdout.log"
-    $stderr = "C:\FogworksResults\$label.stderr.log"
+    $stdout = "C:\FogworksResults\${label}.stdout.log"
+    $stderr = "C:\FogworksResults\${label}.stderr.log"
     $process = Start-Process -FilePath "$work\node.exe" -ArgumentList "`"$work\scripts\smoke-startup.js`" --project-open --packaged `"$exe`"" -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $process.Handle
     if (-not $process.WaitForExit(60000)) { throw "$label timed out." }
@@ -110,8 +149,8 @@ function Smoke-Workflow([string]$label, [string]$exe) {
     Complete-Phase $label "$label passed"
 }
 function Smoke-Startup([string]$label, [string]$exe) {
-    $stdout = "C:\FogworksResults\$label-startup.stdout.log"
-    $stderr = "C:\FogworksResults\$label-startup.stderr.log"
+    $stdout = "C:\FogworksResults\${label}-startup.stdout.log"
+    $stderr = "C:\FogworksResults\${label}-startup.stderr.log"
     $process = Start-Process -FilePath "$work\node.exe" -ArgumentList "`"$work\scripts\smoke-startup.js`" --packaged `"$exe`"" -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $process.Handle
     if (-not $process.WaitForExit(60000)) { throw "$label startup smoke timed out." }
@@ -122,8 +161,8 @@ function Smoke-Historical([string]$label, [string]$exe) {
     $source = Join-Path $work $manifest.historical.file
     $project = Join-Path ([Environment]::GetFolderPath('MyDocuments')) $manifest.historical.file
     Copy-Item -LiteralPath $source -Destination $project -Force
-    $stdout = "C:\FogworksResults\$label.stdout.log"
-    $stderr = "C:\FogworksResults\$label.stderr.log"
+    $stdout = "C:\FogworksResults\${label}.stdout.log"
+    $stderr = "C:\FogworksResults\${label}.stderr.log"
     $schema = $manifest.historical.expectedSchema
     $process = Start-Process -FilePath "$work\node.exe" -ArgumentList "`"$work\scripts\smoke-startup.js`" --historical-migration `"$project`" --historical-schema $schema --packaged `"$exe`"" -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $null = $process.Handle
@@ -204,7 +243,19 @@ function Find-Wizard {
     return $null
 }
 function Click-Element($element) {
-    [void][FogworksWin32]::SendMessage([IntPtr]$element.Current.NativeWindowHandle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    try {
+        $invoke = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $invoke.Invoke()
+        return
+    } catch { }
+    try {
+        $select = $element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $select.Select()
+        return
+    } catch { }
+    $handle = [IntPtr]$element.Current.NativeWindowHandle
+    if ($handle -eq [IntPtr]::Zero) { throw "Control '$($element.Current.Name)' could not be clicked." }
+    [void][FogworksWin32]::SendMessage($handle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
 }
 function Invoke-NamedButton($wizard, [string]$pattern) {
     $button = Find-Controls $wizard 'Button' | Where-Object { $_.Current.Name -match $pattern } | Select-Object -First 1
@@ -276,6 +327,33 @@ function Install-Assisted([string]$label, [string]$scope, [string]$destination, 
     return $root
 }
 try {
+    foreach ($required in @(
+        'C:\FogworksInput\node.exe',
+        'C:\FogworksInput\scripts\normalize-guest-result.js',
+        'C:\FogworksInput\scripts\installerEvidence.js',
+        'C:\FogworksInput\scripts\installerLifecycle.js'
+    )) {
+        if (-not (Test-Path -LiteralPath $required)) { throw "Staged evidence writer is missing: $required" }
+    }
+    if (-not (Test-Elevated)) {
+        $marker = 'C:\Windows\Temp\fogworks-elevation-relaunched.txt'
+        if (Test-Path -LiteralPath $marker) {
+            Record-Step 'Elevation was not available. Per-machine phases will fail closed if they still need an administrator.'
+        } else {
+            [System.IO.File]::WriteAllText($marker, "requested`n")
+            Record-Step 'Requesting elevation for per-machine installs. Approve the User Account Control prompt. This file is not a pass.'
+            $elevated = $null
+            try {
+                $elevated = Start-Process -FilePath 'powershell.exe' -Verb RunAs -PassThru -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File C:\FogworksInput\test-installer-sandbox.ps1'
+                $null = $elevated.Handle
+                if (-not $elevated.WaitForExit(2700000)) { throw 'Elevated guest timed out before the lifecycle finished.' }
+                exit $(if ($null -eq $elevated.ExitCode) { 1 } else { $elevated.ExitCode })
+            } catch {
+                if ($elevated) { throw }
+                Record-Step "Elevation prompt was not accepted: $($_.Exception.Message). Per-user phases will still run."
+            }
+        }
+    }
     Record-Step 'Sandbox guest started'
     if (Test-Path -LiteralPath $work) { throw 'Guest test workspace already exists.' }
     New-Item -ItemType Directory -Path $work | Out-Null
@@ -330,6 +408,7 @@ try {
     Smoke-Workflow 'upgraded-workflow-smoke' $upgradeExe
     Smoke-Historical 'upgraded-historical-migration' $upgradeExe
     Uninstall-App 'upgraded-uninstall' 'currentuser' $upgradeRoot
+    if (-not (Test-Elevated)) { throw 'per-machine-silent requires an elevated guest. Approve the User Account Control prompt and open the sandbox again.' }
     $machineRoot = Install-Silent 'per-machine-silent' "$work\current.exe" 'allusers' $perMachine $manifest.version
     $machineExe = Join-Path $machineRoot 'Canvas Fogworks.exe'
     Smoke-Startup 'per-machine-startup-smoke' $machineExe
@@ -340,6 +419,7 @@ try {
     Smoke-Startup 'gui-per-user-startup-smoke' $guiUserExe
     Smoke-Historical 'gui-per-user-historical-migration' $guiUserExe
     Uninstall-App 'gui-per-user-uninstall' 'currentuser' $guiUserRoot
+    if (-not (Test-Elevated)) { throw 'gui-per-machine requires an elevated guest. Approve the User Account Control prompt and open the sandbox again.' }
     $guiMachineRoot = Install-Assisted 'gui-per-machine' 'allusers' $guiMachine $manifest.version
     $guiMachineExe = Join-Path $guiMachineRoot 'Canvas Fogworks.exe'
     Smoke-Startup 'gui-per-machine-startup-smoke' $guiMachineExe
@@ -356,10 +436,17 @@ try {
         }
     }
     $result.status = 'passed'
-    Record-Step 'Lifecycle checks complete; close Sandbox to discard guest state'
+    $result.error = $null
+    $steps.Add('Lifecycle checks complete; close Sandbox to discard guest state')
+    $result.steps = @($steps.ToArray())
+    Write-Result -RequireAcceptable
 } catch {
     $result.status = 'failed'
     $result.error = $_.Exception.Message
-    Record-Step 'Lifecycle checks failed; guest retained for diagnosis'
+    $steps.Add('Lifecycle checks failed; guest retained for diagnosis')
+    $result.steps = @($steps.ToArray())
+    try { Write-Result } catch {
+        [System.IO.File]::WriteAllText($resultPath, "{`"status`":`"failed`",`"error`":`"result writer failed`"}`n")
+    }
     exit 1
 }

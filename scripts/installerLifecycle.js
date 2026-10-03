@@ -7,8 +7,6 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { releaseIdentityViolations } = require("./check-package");
-const { historicalProjectDocument, HISTORICAL_SOURCE_VERSION, HISTORICAL_NODE_ID } = require("../src/electron/historicalMigration");
 
 const HISTORICAL_PROJECT_FILE = "historical-release-0.0.4.vde";
 const SYNTHETIC_BASELINE_VERSION = "0.0.4";
@@ -44,12 +42,19 @@ function guestLifecyclePhases() {
     return GUEST_PHASES.map(phase => ({ ...phase }));
 }
 
-function hostHardwareGpuPhase() {
+function quoteCommandArg(value) {
+    const text = String(value);
+    if (!/[\s&|<>^"]/.test(text)) return text;
+    return `"${text.replace(/"/g, '\\"')}"`;
+}
+
+function hostHardwareGpuPhase(resultsFile) {
+    const target = resultsFile || "SANDBOX_RESULTS\\hardware-gpu.json";
     return {
         id: "host-hardware-gpu",
         runsInSandbox: false,
-        command: "npm run validate:hardware-gpu",
-        reason: "Virtual GPU stays disabled because it crashed Desktop Window Manager. Hardware evidence is collected on the host."
+        command: `npm run validate:hardware-gpu -- --out ${quoteCommandArg(target)}`,
+        reason: "Virtual GPU stays disabled because it crashed Desktop Window Manager. Hardware evidence is collected on the host, outside Sandbox, and written to hardware-gpu.json."
     };
 }
 
@@ -106,6 +111,10 @@ function defaultInputs(root, pkg, nodePath) {
         [baseline, "baseline.exe"],
         [nodePath, "node.exe"],
         [path.join(root, "scripts/test-installer-sandbox.ps1"), "test-installer-sandbox.ps1"],
+        [path.join(root, "scripts/normalize-guest-result.js"), "scripts/normalize-guest-result.js"],
+        [path.join(root, "scripts/installerEvidence.js"), "scripts/installerEvidence.js"],
+        [path.join(root, "scripts/installerLifecycle.js"), "scripts/installerLifecycle.js"],
+        [path.join(root, "scripts/validate-hardware-gpu.js"), "scripts/validate-hardware-gpu.js"],
         [path.join(root, "scripts/smoke-startup.js"), "scripts/smoke-startup.js"],
         [path.join(root, "src/core/tests/fixtures/triangle.gltf"), "src/core/tests/fixtures/triangle.gltf"],
         [path.join(root, "reference-projects/visual.vde"), "owned-example.vde"]
@@ -113,6 +122,8 @@ function defaultInputs(root, pkg, nodePath) {
 }
 
 function prepareInstallerSandbox(options = {}) {
+    const { releaseIdentityViolations } = require("./check-package");
+    const { historicalProjectDocument, HISTORICAL_SOURCE_VERSION, HISTORICAL_NODE_ID } = require("../src/electron/historicalMigration");
     const root = options.root ?? path.resolve(__dirname, "..");
     const pkg = options.packageJson ?? JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     const violations = releaseIdentityViolations(pkg);
@@ -142,7 +153,7 @@ function prepareInstallerSandbox(options = {}) {
     for (const name of ["current.exe", "baseline.exe"]) {
         if (!byRelative.has(name)) throw new Error(`Installer staging inputs must include ${name}`);
     }
-    const hardwareGpu = hostHardwareGpuPhase();
+    const hardwareGpu = hostHardwareGpuPhase(path.join(results, "hardware-gpu.json"));
     const manifest = {
         version: pkg.version,
         baselineVersion: SYNTHETIC_BASELINE_VERSION,
@@ -182,6 +193,6 @@ function prepareInstallerSandbox(options = {}) {
 
 module.exports = {
     GUEST_PHASES, HISTORICAL_PROJECT_FILE, SYNTHETIC_BASELINE_VERSION,
-    guestLifecyclePhases, hostHardwareGpuPhase, readSchemaVersion, sandboxConfigurationXml,
-    silentInstallArguments, silentUninstallArguments, prepareInstallerSandbox
+    guestLifecyclePhases, hostHardwareGpuPhase, quoteCommandArg, readSchemaVersion, sandboxConfigurationXml,
+    silentInstallArguments, silentUninstallArguments, defaultInputs, prepareInstallerSandbox
 };

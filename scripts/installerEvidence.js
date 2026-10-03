@@ -5,7 +5,7 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const { guestLifecyclePhases, sandboxConfigurationXml } = require("./installerLifecycle");
+const { guestLifecyclePhases, hostHardwareGpuPhase, quoteCommandArg, sandboxConfigurationXml } = require("./installerLifecycle");
 const { hardwareGpuVerdict } = require("./validate-hardware-gpu");
 
 const GUEST_EVIDENCE_KIND = "windows-sandbox-installer-lifecycle";
@@ -88,18 +88,12 @@ function evaluateHardwareGpuEvidence(record) {
     return { acceptable: failures.length === 0, failures };
 }
 
-function shellQuote(value) {
-    const text = String(value);
-    if (!/[\s&|<>^"]/.test(text)) return text;
-    return `"${text.replace(/"/g, '\\"')}"`;
-}
-
 function installerEvidencePlan(options = {}) {
     const results = options.resultsDir || "SANDBOX_RESULTS";
     const guestResult = options.resultsDir ? path.join(options.resultsDir, "result.json") : `${results}\\result.json`;
     const gpuResult = options.resultsDir ? path.join(options.resultsDir, "hardware-gpu.json") : `${results}\\hardware-gpu.json`;
-    const quotedGuest = shellQuote(guestResult);
-    const quotedGpu = shellQuote(gpuResult);
+    const quotedGuest = quoteCommandArg(guestResult);
+    const hardwareGpu = hostHardwareGpuPhase(gpuResult);
     return {
         gate: "RELEASE-001",
         status: "open",
@@ -116,8 +110,8 @@ function installerEvidencePlan(options = {}) {
             { step: 1, host: "windows", command: "npm run build:installer-test-baseline" },
             { step: 2, host: "windows", command: "npm run prepare:installer-sandbox" },
             { step: 3, host: "windows", command: "Open the generated installer-test.wsb in Windows Sandbox. Leave virtual GPU disabled." },
-            { step: 4, host: "windows", command: `npm run validate:hardware-gpu -- --out ${quotedGpu}` },
-            { step: 5, host: "any", command: `npm run check:installer-evidence -- --guest ${quotedGuest} --gpu ${quotedGpu}` }
+            { step: 4, host: "windows", command: hardwareGpu.command },
+            { step: 5, host: "any", command: `npm run check:installer-evidence -- --guest ${quotedGuest} --gpu ${quoteCommandArg(gpuResult)}` }
         ],
         evidenceFiles: [
             {
@@ -132,7 +126,8 @@ function installerEvidencePlan(options = {}) {
             }
         ],
         smokeLogs: expectedGuestSmokeLogs(),
-        manualGate: "RELEASE-001 stays open until a Windows host records both files and check:installer-evidence exits 0. Exit 2 means no evidence files were supplied. That exit is not a pass."
+        manualGate: "RELEASE-001 stays open until a Windows host records both files and check:installer-evidence exits 0. Exit 2 means no evidence files were supplied. That exit is not a pass.",
+        guestWriter: "The guest writes result.json with the staged Node writer. It sets status to passed only when that file already satisfies the guest half of the checker, including every smoke log. That rewrite does not sample a GPU and does not close RELEASE-001."
     };
 }
 
@@ -162,6 +157,11 @@ function operatorText(plan) {
         "Startup phases use <phase-id>-startup.stdout.log and <phase-id>-startup.stderr.log.",
         "Workflow and historical-migration phases use <phase-id>.stdout.log and <phase-id>.stderr.log.",
         "",
+        plan.guestWriter,
+        "result.fields.txt and the evidence-writer logs beside result.json are scratch files. They are not evidence.",
+        "Approve the User Account Control prompt if it appears before the per-machine phases. Declining still leaves RELEASE-001 open.",
+        "Close Windows Sandbox after result.json shows status passed. Then run the hardware-GPU command on the host, outside Sandbox, and then the checker.",
+        "",
         plan.manualGate,
         ""
     );
@@ -184,6 +184,100 @@ function writeInstallerEvidencePlan(directory, options = {}) {
     };
 }
 
+const SMOKE_KIND_BY_CALL = { Startup: "startup", Workflow: "workflow", Historical: "historical-migration" };
+
+function guestSmokeInvocations(scriptText) {
+    const calls = [];
+    const pattern = /Smoke-(Startup|Workflow|Historical) '([^']+)'/g;
+    let match;
+    while ((match = pattern.exec(scriptText))) calls.push({ kind: match[1], id: match[2] });
+    return calls;
+}
+
+function smokeLogNamesFromInvocations(calls) {
+    const logs = [];
+    for (const call of calls) {
+        const stem = call.kind === "Startup" ? `${call.id}-startup` : call.id;
+        logs.push(`${stem}.stdout.log`, `${stem}.stderr.log`);
+    }
+    return logs;
+}
+
+function guestSmokeContractFailures(scriptText) {
+    const failures = [];
+    const calls = guestSmokeInvocations(scriptText);
+    const expected = guestLifecyclePhases().filter(phase => phase.kind === "smoke");
+    if (calls.length !== expected.length) {
+        failures.push(`Guest script invokes ${calls.length} smokes; the phase list has ${expected.length}.`);
+    }
+    const limit = Math.min(calls.length, expected.length);
+    for (let index = 0; index < limit; index++) {
+        const phase = expected[index];
+        const call = calls[index];
+        if (call.id !== phase.id) failures.push(`Smoke call '${call.id}' does not match phase '${phase.id}'.`);
+        if (SMOKE_KIND_BY_CALL[call.kind] !== phase.smoke) {
+            failures.push(`Phase ${phase.id} is a ${phase.smoke} smoke but the guest calls Smoke-${call.kind}.`);
+        }
+    }
+    const derived = smokeLogNamesFromInvocations(calls);
+    const required = expectedGuestSmokeLogs();
+    if (derived.join("\n") !== required.join("\n")) {
+        failures.push("Smoke log names derived from the guest script do not match the checker.");
+    }
+    return failures;
+}
+
+function decodeField(token) {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(token) || token.length % 4 !== 0) {
+        throw new Error("Evidence field value is not base64.");
+    }
+    return Buffer.from(token, "base64").toString("utf8");
+}
+
+function fieldsToGuestResult(text) {
+    const result = {
+        status: null,
+        evidenceKind: null,
+        virtualGpu: null,
+        completedPhases: [],
+        steps: [],
+        error: null,
+        syntheticBaseline: false,
+        historicalReleaseInstaller: false,
+        hardwareGpuValidation: null,
+        publisherMetadata: false,
+        signing: false
+    };
+    const booleans = new Set(["syntheticBaseline", "historicalReleaseInstaller", "publisherMetadata", "signing"]);
+    const strings = new Set(["status", "evidenceKind", "virtualGpu", "hardwareGpuValidation", "installerSha256"]);
+    for (const rawLine of String(text).split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const space = line.indexOf(" ");
+        if (space < 0) throw new Error(`Evidence field line is missing a value: ${line}`);
+        const name = line.slice(0, space);
+        const token = line.slice(space + 1);
+        if (name === "completed") result.completedPhases.push(decodeField(token));
+        else if (name === "step") result.steps.push(decodeField(token));
+        else if (name === "error" && token === "~") result.error = null;
+        else if (name === "error") result.error = decodeField(token);
+        else if (booleans.has(name)) {
+            if (token !== "true" && token !== "false") throw new Error(`${name} must be true or false.`);
+            result[name] = token === "true";
+        } else if (strings.has(name)) result[name] = decodeField(token);
+        else throw new Error(`Unknown evidence field: ${name}`);
+    }
+    if (!result.installerSha256) delete result.installerSha256;
+    return result;
+}
+
+function writeGuestResultFile(result, file) {
+    const target = path.resolve(file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, `${JSON.stringify(result, null, 2)}\n`);
+    return target;
+}
+
 function assertHarnessContract(files = {}) {
     const failures = [];
     const guestScript = files.guestScript ?? fs.readFileSync(path.join(__dirname, "test-installer-sandbox.ps1"), "utf8");
@@ -193,13 +287,19 @@ function assertHarnessContract(files = {}) {
     if (!guestScript.includes("virtualGpu = 'disabled'")) failures.push("Guest result must record virtual GPU disabled.");
     if (!guestScript.includes(`hardwareGpuValidation = '${GUEST_HARDWARE_CLAIM}'`)) failures.push("Guest result must refuse hardware certification.");
     if (!guestScript.includes("Complete-Phase 'unsigned-anonymous'")) failures.push("Guest script must complete unsigned-anonymous.");
-    if (!guestScript.includes("$label-startup.stdout.log") || !guestScript.includes("$label.stdout.log")) {
+    if (!guestScript.includes("${label}-startup.stdout.log") || !guestScript.includes("${label}.stdout.log")) {
         failures.push("Guest smoke logs must be named from the phase id.");
+    }
+    if (!guestScript.includes("normalize-guest-result.js")) failures.push("Guest script must write result.json through the staged Node writer.");
+    if (!guestScript.includes("--require-acceptable")) failures.push("Guest script must refuse status passed unless the checker would accept the guest file.");
+    if (!guestScript.includes("SelectionItemPattern") || !guestScript.includes("InvokePattern")) {
+        failures.push("Assisted installs must click through UI Automation invoke or selection before a raw button message.");
     }
     if (!guestScript.includes("WDAGUtilityAccount")) failures.push("Guest script must keep the Sandbox account guard.");
     if (!/<vGPU>Disable<\/vGPU>/.test(sandboxXml) || /<vGPU>\s*Enable/i.test(sandboxXml)) {
         failures.push("Sandbox configuration must keep virtual GPU disabled.");
     }
+    failures.push(...guestSmokeContractFailures(guestScript));
     for (const phase of guestLifecyclePhases()) {
         if (!guestScript.includes(`'${phase.id}'`)) failures.push(`Guest script does not name phase ${phase.id}.`);
     }
@@ -298,6 +398,8 @@ function runInstallerEvidenceCheck(argv) {
 module.exports = {
     GUEST_EVIDENCE_KIND, GUEST_HARDWARE_CLAIM, HOST_GPU_EVIDENCE_KIND,
     expectedGuestSmokeLogs, readJsonFile, evaluateGuestLifecycleResult, evaluateHardwareGpuEvidence,
+    guestSmokeInvocations, smokeLogNamesFromInvocations, guestSmokeContractFailures,
+    fieldsToGuestResult, writeGuestResultFile,
     installerEvidencePlan, operatorText, writeInstallerEvidencePlan, assertHarnessContract,
     runInstallerEvidenceCheck
 };

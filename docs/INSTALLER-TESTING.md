@@ -44,9 +44,11 @@ npm run build:installer-test-baseline
 npm run prepare:installer-sandbox
 ```
 
-Open the printed `installer-test.wsb`. Leave virtual GPU disabled. The guest writes `results\result.json` and one stdout/stderr pair per smoke phase. Startup phases use `<phase-id>-startup.stdout.log` and `<phase-id>-startup.stderr.log`. Workflow and historical-migration phases use `<phase-id>.stdout.log` and `<phase-id>.stderr.log`.
+Open the printed `installer-test.wsb`. Leave virtual GPU disabled. If a User Account Control prompt appears, approve it. The guest asks once so the per-machine phases can run elevated. Declining that prompt still runs the per-user phases, then records `status: failed` when a per-machine phase is reached. That file is not a pass.
 
-Then, on that same Windows host and outside Sandbox, write the hardware verdict next to the guest result. The printed `hardwareGpuCommand` is this command with the staging path filled in:
+The guest writes `results\result.json` with the staged Node writer (`scripts/normalize-guest-result.js`), not Windows PowerShell `ConvertTo-Json`. `result.fields.txt` and `evidence-writer.stdout.log` / `evidence-writer.stderr.log` beside it are scratch files for that writer. They are not evidence. It sets `status` to `passed` only when that file already satisfies the guest half of the checker, including one stdout/stderr pair per smoke phase. A rejected file stays unwritten at that step, and the guest then records `status: failed`. Startup phases use `<phase-id>-startup.stdout.log` and `<phase-id>-startup.stderr.log`. Workflow and historical-migration phases use `<phase-id>.stdout.log` and `<phase-id>.stderr.log`.
+
+Close Windows Sandbox after `result.json` shows `"status": "passed"`. Then, on that same Windows host and outside Sandbox, write the hardware verdict next to the guest result. The printed `hardwareGpuCommand`, and the same command in the staged manifest, include `--out` for that staging folder:
 
 ```powershell
 npm run validate:hardware-gpu -- --out SANDBOX_RESULTS\hardware-gpu.json
@@ -100,7 +102,7 @@ The complete sequence passed again for the branded September 7 build, SHA-256 `D
 
 ## Scope limitations
 
-The extended guest phases are implemented in the harness, and `check:installer-evidence` can score their result files. The September 7 run remains the last recorded full Sandbox lifecycle, and that run did not include historical migration, assisted GUI navigation or per-machine installation. No later Sandbox `result.json` or host `hardware-gpu.json` has been recorded. Executing the extended guest and recording a host `validate:hardware-gpu` verdict are still required before those phases count as a pass. A software-rendered guest result is not hardware-GPU certification, and virtual GPU stays disabled. Exit 2 from the checker is the open manual gate.
+The extended guest phases are implemented in the harness, and `check:installer-evidence` can score their result files. The guest writer and the checker share one phase and smoke-log list, so a Windows host that finishes the guest produces a `result.json` the guest half of the checker accepts. The September 7 run remains the last recorded full Sandbox lifecycle, and that run did not include historical migration, assisted GUI navigation or per-machine installation. No later Sandbox `result.json` or host `hardware-gpu.json` has been recorded. Executing the extended guest and recording a host `validate:hardware-gpu` verdict are still required before those phases count as a pass. A software-rendered guest result is not hardware-GPU certification, and virtual GPU stays disabled. Exit 2 from the checker is the open manual gate.
 
 This does not certify signing or SmartScreen reputation. Preservation asserts unchanged recovery bytes, not successful recovery UI restoration. The full Open–Edit–Save workflow remains on the silent per-user path; GUI and per-machine installs run startup and historical migration. The September 7 branding build includes an original vector icon. Personal publisher information and signing are intentionally omitted at the user's request; Windows may identify it as an unknown publisher. The package gate rejects publisher metadata and signing configuration, and the guest rejects a CompanyName or an Authenticode signature.
 

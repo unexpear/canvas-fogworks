@@ -28,6 +28,12 @@ function classifyGpuRenderer(renderer) {
     if (/angle/i.test(text) || /direct3d|d3d1[12]|metal|vulkan|opengl/i.test(text)) {
         return { kind: "hardware", reason: "gpu api without a software renderer token" };
     }
+    if (/\b(nvidia|geforce|quadro)\b/i.test(text)
+        || /\bradeon\b/i.test(text)
+        || (/\bamd\b/i.test(text) && /\brx\b/i.test(text))
+        || (/\bintel\b/i.test(text) && /\b(iris|uhd|hd graphics|arc)\b/i.test(text))) {
+        return { kind: "hardware", reason: "named hardware adapter without a software renderer token" };
+    }
     return { kind: "unknown", reason: "renderer is not a recognized hardware or software adapter" };
 }
 
@@ -46,7 +52,14 @@ function hardwareGpuVerdict(renderer, options = {}) {
     };
 }
 
-module.exports = { classifyGpuRenderer, hardwareGpuVerdict, SOFTWARE_RENDERER_PATTERNS };
+function writeHardwareGpuFile(file, verdict) {
+    const target = path.resolve(file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, `${JSON.stringify(verdict, null, 2)}\n`);
+    return target;
+}
+
+module.exports = { classifyGpuRenderer, hardwareGpuVerdict, writeHardwareGpuFile, SOFTWARE_RENDERER_PATTERNS };
 
 if (require.main === module) {
     const { app, BrowserWindow } = require("electron");
@@ -77,7 +90,7 @@ if (require.main === module) {
             };
             const outAt = process.argv.indexOf("--out");
             const body = JSON.stringify(verdict, null, 2);
-            if (outAt >= 0 && process.argv[outAt + 1]) fs.writeFileSync(path.resolve(process.argv[outAt + 1]), body);
+            if (outAt >= 0 && process.argv[outAt + 1]) writeHardwareGpuFile(process.argv[outAt + 1], verdict);
             console.log(body);
             clearTimeout(timeout);
             win.destroy();
