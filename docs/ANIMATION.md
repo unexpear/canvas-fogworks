@@ -1,11 +1,9 @@
 # Animation workflow
 
-<!-- describes: src/core/document/AnimationController.ts, src/core/runtime/AnimationPlayback.ts, src/core/runtime/AnimationWorld.ts, src/app/AnimationPanel.tsx, src/app/App.tsx -->
-<!-- re-read 2026-09-28: App.tsx still wires clip playback. The Controls panel rebinds named
-     gameplay keys, and the folders drawer stays in FoldersDrawer.tsx. Neither changes animation
-     authoring or runtime sampling. App.tsx now restores browser and desktop recovery snapshots
-     and plays embedded 3D sound cues taken off the stepped world. Clip authoring, preview, and
-     runtime controllers are unchanged. -->
+<!-- describes: src/core/document/AnimationController.ts, src/core/runtime/AnimationPlayback.ts, src/core/runtime/AnimationWorld.ts, src/app/AnimationPanel.tsx, src/app/TimelineTransport.tsx, src/app/App.tsx -->
+<!-- re-read 2026-10-02: Play, scrub, key, hold and onion skin are TimelineTransport.tsx.
+     App.tsx still owns the preview clock, keyframe actions, one-shot restart and clip selection.
+     Clip authoring stays in AnimationPanel. Runtime sampling is unchanged. -->
 
 Delivered in schema 77: named timeline clips, preview and per-node runtime controllers,
 shared by 2D editing and animated 2D planes/billboards in the 3D workspace.

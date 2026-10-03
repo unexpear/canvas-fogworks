@@ -9171,7 +9171,9 @@ describe("Tokens: authored, assigned, themed", () => {
         expect(variableKeyError("__proto__")).not.toBeNull();
         expect(variableKeyError("")).not.toBeNull();
         expect(variableKeyError("color/ok")).toBeNull();
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "../../app/TokensPanel.tsx"), "utf8");
         expect(src).toMatch(/variableKeyError\(key\)/);
     });
 
@@ -9196,7 +9198,9 @@ describe("Tokens: authored, assigned, themed", () => {
 
     test("the UI can both AUTHOR a token and ASSIGN one — either alone is useless", () => {
         // The audit that prompted this slice, for tokens the way it exists for Style and Layout.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "../../app/TokensPanel.tsx"), "utf8");
         expect(src).toMatch(/new SetVariableAction\(/);      // author
         expect(src).toMatch(/new DeleteVariableAction\(/);   // remove
         expect(src).toMatch(/<TokenSelect/);                 // assign
@@ -12623,7 +12627,9 @@ describe("Script API", () => {
     });
 
     test("the panel compiles against the CURRENT document and shows every refusal", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "../../app/ScriptPanel.tsx"), "utf8");
         // The script ran against a SNAPSHOT; anything that changed underneath it must be caught
         // by the validators rather than assumed away.
         expect(src).toMatch(/compileScript\(dispatcher\.getDocument\(\), result\.requests,/);

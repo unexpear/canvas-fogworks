@@ -39,8 +39,8 @@ import { computeGeometry, ComputedState, contentBounds, selectionBounds, hitTest
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
 import { ContentPatch, UpdateNodeContentAction } from "../core/actions/UpdateNodeContentAction";
 import { resolveScene, isVirtualId } from "../core/document/Components";
-import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
-import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
+import { SetActiveThemeAction } from "../core/actions/VariableActions";
+import { VariableStore } from "../core/document/Variables";
 import { TrackSize, newGridPatch, VariantKey, variantError, slotError, variantNameError } from "../core/document/Node";
 import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/VariantActions";
 import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
@@ -117,8 +117,6 @@ import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interactio
 import { BEZIER_PRESETS, CubicBezier } from "../core/document/Bezier";
 import { lerpViewport } from "../editor/EditorState";
 import { SetInteractionsAction } from "../core/actions/SetInteractionsAction";
-import { compileScript, snapshotFor } from "../core/script/ScriptApi";
-import { runScript } from "../editor/ScriptRunner";
 import { applyActiveState } from "../core/document/Components";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
@@ -172,6 +170,9 @@ import { RuntimeControls, Workspace, WorkspaceControls, WORKSPACES } from "./App
 import { FoldersDrawer, AsepritePlacementInput } from "./FoldersDrawer";
 import { ThreeDInspector } from "./ThreeDInspector";
 import { DocumentControls } from "./DocumentControls";
+import { ScriptPanel } from "./ScriptPanel";
+import { TimelineTransport } from "./TimelineTransport";
+import { TokenSelect, TokensPanel } from "./TokensPanel";
 import { layerNodeLabel, LayersPanel, nodeTypeLabel } from "./LayersPanel";
 import {BlockoutShape} from "../core/geometry/Blockout3D";
 
@@ -4879,51 +4880,37 @@ export function App() {
                     const id = es.selectedNodeIds[0];
                     return !!id && dispatcher.dispatchAction(new SetAnimationControllerAction(dispatcher.getDocument(), id, controller)).success;
                 }} />}
-            {(() => { const timeline = dispatcher.getDocument().timeline; return timeline ? (
-                <div style={{ padding: "4px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`,
-                              display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#ccc" }}>
-                    <button style={ALIGN_BUTTON_STYLE} title="Play the selected clip or timeline from the playhead" disabled={es.playing}
-                        onClick={() => {
-                            if (!es.playingTimeline && previewClip?.loop === false && (es.frame ?? 0) >= previewClip.to) es.frame = previewClip.from;
-                            es.playingTimeline = !es.playingTimeline; refresh();
-                        }}>
-                        {es.playingTimeline ? "⏸" : "▶"}
-                    </button>
-                    <input
-                        type="range" min={previewClip?.from ?? 0} max={previewClip?.to ?? timeline.frames - 1} step={1} disabled={es.playing}
-                        value={Math.round(es.frame ?? 0)}
-                        onChange={e => { es.playingTimeline = false; es.frame = parseInt(e.target.value, 10); refresh(); }}
-                        style={{ flex: 1 }}
-                        title="Scrub the playhead. Scrubbing is not an edit — it pushes no undo step."
-                    />
-                    <span style={{ width: 84, textAlign: "right", color: "#888" }}>
-                        {Math.round(es.frame ?? 0)} / {timeline.frames - 1} · {timeline.fps}fps
-                    </span>
-                    <button style={ALIGN_BUTTON_STYLE} onClick={() => addKeyframe(false)}
-                        title="Key the selected node here, TWEENING from it to the next keyframe">◆ Key</button>
-                    <button style={ALIGN_BUTTON_STYLE} onClick={() => addKeyframe(true)}
-                        title="Key the selected node here and HOLD it until the next keyframe — frame-by-frame animation">◼ Hold</button>
-                    <button style={ALIGN_BUTTON_STYLE} onClick={removeKeyframe}
-                        title="Remove the keyframe on this frame">✕</button>
-                    {(() => {
-                        // Shown only when the playhead is ON a keyframe, because easing describes
-                        // the tween leaving one — offering it anywhere else would be a control
-                        // that silently does nothing.
-                        const id = es.selectedNodeIds[0];
-                        const k = id ? dispatcher.getDocument().nodes.get(id)?.track
-                            ?.find(kf => kf.frame === Math.round(es.frame ?? 0)) : undefined;
-                        if (!k) return null;
-                        return k.hold
-                            ? <span style={{ color: "#666", fontSize: 11 }} title="A HELD keyframe does not tween, so it has no curve to shape.">held</span>
-                            : <EasingSelect value={k.easing} width={104} onPick={setKeyframeEasing} />;
-                    })()}
-                    <button style={{ ...ALIGN_BUTTON_STYLE, color: es.onion ? UI.accent : "#ccc" }}
-                        onClick={() => { es.onion = es.onion ? undefined : 2; refresh(); }}
-                        title="ONION SKIN: draw the neighbouring frames faintly behind this one. Ghosts are not pickable — they are a picture of another moment.">
-                        ◐ Onion
-                    </button>
-                </div>
-            ) : null; })()}
+            {(() => {
+                const timeline = dispatcher.getDocument().timeline;
+                if (!timeline) return null;
+                const frame = Math.round(es.frame ?? 0);
+                const id = es.selectedNodeIds[0];
+                const keyframe = id ? dispatcher.getDocument().nodes.get(id)?.track
+                    ?.find(kf => kf.frame === frame) : undefined;
+                return <TimelineTransport
+                    frames={timeline.frames}
+                    fps={timeline.fps}
+                    frame={frame}
+                    rangeFrom={previewClip?.from ?? 0}
+                    rangeTo={previewClip?.to ?? timeline.frames - 1}
+                    playing={es.playing}
+                    playingTimeline={!!es.playingTimeline}
+                    onion={!!es.onion}
+                    keyframe={!keyframe ? "none" : keyframe.hold ? "held" : "tween"}
+                    easingControl={keyframe && !keyframe.hold
+                        ? <EasingSelect value={keyframe.easing} width={104} onPick={setKeyframeEasing} />
+                        : null}
+                    onTogglePlay={() => {
+                        if (!es.playingTimeline && previewClip?.loop === false && (es.frame ?? 0) >= previewClip.to) es.frame = previewClip.from;
+                        es.playingTimeline = !es.playingTimeline; refresh();
+                    }}
+                    onScrub={next => { es.playingTimeline = false; es.frame = next; refresh(); }}
+                    onKey={() => addKeyframe(false)}
+                    onHold={() => addKeyframe(true)}
+                    onRemoveKey={removeKeyframe}
+                    onToggleOnion={() => { es.onion = es.onion ? undefined : 2; refresh(); }}
+                />;
+            })()}
 
             {es.playing && (()=>{
                 const world=workspace==="3d"?world3dRef.current:es.world;
@@ -5546,47 +5533,6 @@ function SelectInput({ value, options, onChange }: { value: string; options: rea
 
 
 /**
- * The TOKENS panel — design tokens (M5) reaching the UI at last.
- *
- * The store, per-theme values, alias resolution, cycle safety and the visible magenta fallback
- * have all been in the engine and both renderers since schema 19. Nothing could create a token,
- * so `$color/brand` only existed if you hand-edited the file.
- *
- * Every edit goes through the existing `SetVariableAction` / `DeleteVariableAction`, so tokens
- * inherit validation and undo exactly like a node edit. Deleting a token in use is deliberately
- * allowed: a dangling reference is valid at rest and renders the fallback, which is the same
- * rule a dangling `componentId` follows — the alternative is a delete that refuses to run and
- * gives no way out.
- */
-
-/**
- * Assign a design token to a colour slot. Without this, tokens are creatable but unusable —
- * the same "built but unreachable" trap this whole stretch of work has been closing.
- *
- * Shows the CURRENT value as `$key` when the slot already holds a reference, so you can see at
- * a glance which colours are tokenised and which are hardcoded.
- */
-function TokenSelect({ store, value, onPick }: { store: VariableStore; value: string; onPick: (v: string) => void }) {
-    const colorKeys = Object.keys(store).filter(k => store[k].type === "color").sort();
-    if (colorKeys.length === 0) return null;
-    const current = tokenKeyOf(value);
-    return (
-        <select
-            value={current}
-            onChange={e => onPick(tokenRefFor(e.target.value))}
-            title="Use a design token for this colour"
-            style={{
-                width: "100%", boxSizing: "border-box", fontSize: 10, padding: "1px 3px", marginBottom: 4,
-                background: UI.raised, color: current ? UI.accent : UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2
-            }}
-        >
-            <option value="">— no token (fixed colour) —</option>
-            {colorKeys.map(k => <option key={k} value={k}>${k}</option>)}
-        </select>
-    );
-}
-
-/**
  * A grid track-list field: `1fr 1fr 200px`, `auto`, `120px 1fr`.
  *
  * It keeps its own DRAFT text while you type, because a track list passes through invalid
@@ -6071,179 +6017,6 @@ function TrackListInput({ value, placeholder, allowEmpty, onCommit }: {
             />
             {error && <div style={{ fontSize: 10, color: UI.warn, marginBottom: 4 }}>{error}</div>}
         </>
-    );
-}
-
-/**
- * The SCRIPT panel (Milestone 15) — write a small program, run it, see what it did.
- *
- * The panel is deliberately thin, because none of the safety lives here: the script runs in a
- * worker (`runScript`) and comes back as plain data, which `compileScript` turns into ordinary
- * Actions — the same ones the inspector builds — inside ONE transaction. So a script is one undo,
- * and a script cannot do anything a person could not do by hand.
- *
- * Refusals are SHOWN. A script that asked for twelve things and got ten is a fact its author
- * needs; swallowing the two would leave them debugging a program that looked like it ran.
- */
-function ScriptPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; refresh: () => void }) {
-    const [source, setSource] = useState(
-        "// `api.nodes` is a snapshot; every call queues one edit.\n" +
-        "for (const n of api.nodes) {\n" +
-        "  if (n.type === \"core.rectangle\") api.style(n.id, { fill: \"#00bfff\" });\n" +
-        "}\n"
-    );
-    const [output, setOutput] = useState<string[]>([]);
-    const [busy, setBusy] = useState(false);
-
-    const run = async () => {
-        setBusy(true);
-        setOutput([]);
-        const doc = dispatcher.getDocument();
-        const result = await runScript(source, snapshotFor(doc));
-        const lines = [...result.log];
-        if (result.error) lines.push(`error: ${result.error}`);
-
-        // Compile against the CURRENT document — the script ran against a snapshot, and anything
-        // that changed underneath it is caught by each Action's own validator rather than assumed.
-        const compiled = compileScript(dispatcher.getDocument(), result.requests, () => crypto.randomUUID());
-        lines.push(...compiled.refusals.map(r => `refused ${r}`));
-        if (compiled.action) {
-            const ok = dispatcher.dispatchAction(compiled.action).success;
-            lines.push(ok ? `applied ${result.requests.length - compiled.refusals.length} edit(s) — one undo`
-                : "the transaction was refused as a whole");
-        } else if (!result.error) {
-            lines.push("nothing to apply");
-        }
-        setOutput(lines);
-        setBusy(false);
-        refresh();
-    };
-
-    return (
-        <>
-            <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 6 }}>
-                Runs in a sandbox with no page, no filesystem and no network. It can only ask for
-                edits — each one is validated, and the whole run is a single undo.
-            </div>
-            <textarea
-                value={source}
-                onChange={e => setSource(e.target.value)}
-                spellCheck={false}
-                style={{
-                    width: "100%", height: 180, boxSizing: "border-box", fontSize: 11,
-                    fontFamily: "ui-monospace, Consolas, monospace", padding: 6,
-                    background: UI.bg, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3
-                }}
-            />
-            <button
-                onClick={run}
-                disabled={busy}
-                style={{
-                    marginTop: 6, width: "100%", fontSize: 11, padding: "4px 8px",
-                    background: busy ? "transparent" : UI.accentSoft, color: "#ccc",
-                    border: `1px solid ${UI.line}`, borderRadius: 3, cursor: busy ? "default" : "pointer"
-                }}
-            >{busy ? "Running…" : "▶ Run"}</button>
-            {output.length > 0 && (
-                <pre style={{
-                    marginTop: 8, fontSize: 10, whiteSpace: "pre-wrap", color: UI.textDim,
-                    background: UI.bg, border: `1px solid ${UI.line}`, borderRadius: 3, padding: 6
-                }}>{output.join("\n")}</pre>
-            )}
-        </>
-    );
-}
-
-function TokensPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; refresh: () => void }) {
-    const [newKey, setNewKey] = useState("");
-    const doc = dispatcher.getDocument();
-    const store = doc.variables as VariableStore;
-    const theme = doc.activeTheme;
-    const keys = Object.keys(store).sort();
-
-    const set = (key: string, variable: Variable) => {
-        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), key, variable), { coalesce: true });
-        refresh();
-    };
-
-    return (
-        <div style={{ fontSize: 11 }}>
-            <div style={{ color: UI.textFaint, marginBottom: 6 }}>
-                Values resolve against the active theme ({theme}). A token used by a style shows through
-                every node at once.
-            </div>
-
-            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-                <input
-                    type="text"
-                    value={newKey}
-                    placeholder="color/brand"
-                    onChange={e => setNewKey(e.target.value)}
-                    onKeyDown={e => {
-                        if (e.key !== "Enter") return;
-                        const key = newKey.trim();
-                        if (!key) return;
-                        // The shared `variableKeyError` is the authority — the field just explains.
-                        const err = variableKeyError(key);
-                        if (err) { window.alert(`That token name can't be used: ${err}.`); return; }
-                        set(key, { type: key.startsWith("spacing") || key.startsWith("radius") ? "spacing" : "color", value: key.startsWith("spacing") || key.startsWith("radius") ? 8 : "#4a90d9" });
-                        setNewKey("");
-                    }}
-                    style={{ flex: 1, boxSizing: "border-box", fontSize: 11, padding: "3px 5px", background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
-                />
-            </div>
-
-            {keys.length === 0 && (
-                <div style={{ color: UI.textFaint }}>No tokens yet. Type a name and press Enter — a name starting with “spacing” or “radius” becomes a number token.</div>
-            )}
-
-            {keys.map(key => {
-                const v = store[key];
-                const themed = v.modes?.[theme];
-                const isColor = v.type === "color";
-                return (
-                    <div key={key} style={{ borderTop: `1px solid ${UI.line}`, padding: "6px 0" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span style={{ flex: 1, color: UI.text, wordBreak: "break-all" }}>${key}</span>
-                            <button
-                                title="Delete this token — anything using it falls back to the debug colour"
-                                onClick={() => {
-                                    dispatcher.dispatchAction(new DeleteVariableAction(dispatcher.getDocument(), key));
-                                    refresh();
-                                }}
-                                style={{ fontSize: 10, padding: "0 5px", background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
-                            >✕</button>
-                        </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 4, alignItems: "center", marginTop: 3 }}>
-                            <span style={{ color: UI.textFaint }}>base</span>
-                            {isColor ? (
-                                <input
-                                    type="color"
-                                    value={typeof v.value === "string" && /^#[0-9a-fA-F]{6}$/.test(v.value) ? v.value : "#888888"}
-                                    onChange={e => set(key, { ...v, value: e.target.value })}
-                                    style={{ width: "100%", height: 20, border: "none", background: "transparent", cursor: "pointer" }}
-                                />
-                            ) : (
-                                <NumInput value={typeof v.value === "number" ? v.value : 0} onChange={n => set(key, { ...v, value: n })} />
-                            )}
-                            {/* A per-theme override is what makes a token more than a constant. */}
-                            <span style={{ color: UI.textFaint }}>{theme}</span>
-                            {isColor ? (
-                                <input
-                                    type="color"
-                                    value={typeof themed === "string" && /^#[0-9a-fA-F]{6}$/.test(themed) ? themed : "#888888"}
-                                    onChange={e => set(key, { ...v, modes: { ...v.modes, [theme]: e.target.value } })}
-                                    style={{ width: "100%", height: 20, border: "none", background: "transparent", cursor: "pointer", opacity: themed === undefined ? 0.35 : 1 }}
-                                />
-                            ) : (
-                                <NumInput value={typeof themed === "number" ? themed : (typeof v.value === "number" ? v.value : 0)}
-                                    onChange={n => set(key, { ...v, modes: { ...v.modes, [theme]: n } })} />
-                            )}
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
     );
 }
 
