@@ -2,6 +2,7 @@
  * @module benchmark-budgets
  * @description Informational SCALE-001 release budgets. Additional host samples compare
  * against the frozen cohort and do not change it. Comparisons do not fail CI.
+ * previewHardwareAdmission prints a physical-GPU cohort edit and leaves the files unchanged.
  *
  * Interactive frame work still aims at 16.67 ms. A release budget is 1.5× the highest
  * p95 in the frozen cohort for that workload, rounded up to 0.1 ms. One hardware GPU
@@ -123,6 +124,9 @@ const GPU_IRIS_XE_P95_MS = {
 const GPU_HARDWARE_BUDGETS_MS = Object.fromEntries(
     Object.entries(GPU_IRIS_XE_P95_MS).map(([name, samples]) => [name, calibrateMs(samples)])
 );
+
+/** Workloads a later physical GPU host must include before it can join the frozen GPU cohort. */
+const GPU_ADMISSION_WORKLOADS = Object.freeze(["pixel-workshop", "relay", "animated-meshes-100"]);
 
 /**
  * Named attribution for RECORDED_P95_MS. The arrays above stay the budget input.
@@ -287,6 +291,9 @@ function normalizeHostSample(input) {
     if (input.admitsToReleaseBudget === true || input.admitsToHardwareBudget === true || input.frozen === true) {
         throw new Error("a recorded host sample cannot admit itself into a frozen budget");
     }
+    if (input.physicalGpu === true || input.physicalGpuAttested === true) {
+        throw new Error("a recorded host sample cannot attest that it is a physical GPU");
+    }
     const renderer = input.renderer == null || String(input.renderer).trim() === "" ? null : String(input.renderer).trim();
     let rendererKind = input.rendererKind == null ? null : String(input.rendererKind);
     if (renderer) {
@@ -386,6 +393,125 @@ function compareHostSample(sample) {
         ciGateEnabled: CI_GATE_ENABLED,
         excludedFromHardwareBudget: !(gpu && normalized.rendererKind === "hardware"),
         admitted: false,
+        rows
+    };
+}
+
+/**
+ * Preview appending one GPU sample to the frozen hardware cohort.
+ * The sample file cannot attest a physical machine. Software GL stays ineligible.
+ * This function does not edit FROZEN_GPU_HOSTS, GPU_IRIS_XE_P95_MS, or CI_GATE_ENABLED.
+ * One eligible host still leaves the CI gate off.
+ */
+function previewHardwareAdmission(sample, options = {}) {
+    if (options.physicalGpuAttested != null && typeof options.physicalGpuAttested !== "boolean") {
+        throw new Error("physicalGpuAttested must be a boolean");
+    }
+    const attested = options.physicalGpuAttested === true;
+    const normalized = normalizeHostSample(sample);
+    const blockers = [];
+    const classifiedHardware = normalized.kind === "gpu" && normalized.rendererKind === "hardware";
+    if (normalized.kind !== "gpu") blockers.push("a cpu sample is not a hardware GPU measurement");
+    else if (normalized.rendererKind === "software") blockers.push("software GL is excluded from the hardware GPU cohort");
+    else if (normalized.rendererKind === "unavailable") blockers.push("unavailable WebGL has no timings to admit");
+    else if (!classifiedHardware) blockers.push("renderer is not classified as hardware");
+    if (normalized.id && FROZEN_SAMPLE_IDS.has(normalized.id)) {
+        blockers.push(`${normalized.id} is already a frozen cohort id`);
+    }
+    const measured = {};
+    if (classifiedHardware) {
+        for (const name of GPU_ADMISSION_WORKLOADS) {
+            const value = normalized.p95Ms[name];
+            if (value == null) blockers.push(`missing required workload ${name}`);
+            else if (Array.isArray(value)) blockers.push(`${name} must be one p95, not a list`);
+            else measured[name] = value;
+        }
+        if (!normalized.id || !normalized.recorded) {
+            blockers.push("a stored sample needs an id and a YYYY-MM-DD recorded date before admission");
+        }
+    }
+    const readyForOperatorAttestation = classifiedHardware && blockers.length === 0;
+    if (readyForOperatorAttestation && !attested) {
+        blockers.push("pass --physical-gpu only for a machine you know is a physical GPU; a renderer string is not that attestation");
+    }
+    if (attested && !classifiedHardware) {
+        blockers.push("attestation cannot reclassify this sample as a physical GPU");
+    }
+    const eligible = readyForOperatorAttestation && attested;
+    const proposedBudgetsMs = readyForOperatorAttestation
+        ? Object.fromEntries(GPU_ADMISSION_WORKLOADS.map(name => [
+            name,
+            calibrateMs(GPU_IRIS_XE_P95_MS[name].concat([measured[name]]))
+        ]))
+        : null;
+    const recordedOnly = Object.keys(normalized.p95Ms)
+        .filter(name => !GPU_ADMISSION_WORKLOADS.includes(name))
+        .sort();
+    const cohortEntry = eligible ? {
+        id: normalized.id,
+        recorded: normalized.recorded,
+        kind: "gpu",
+        rendererKind: "hardware",
+        renderer: normalized.renderer,
+        note: normalized.note || "Physical GPU sample. Append by a source edit; this preview does not apply it.",
+        p95Ms: Object.fromEntries(GPU_ADMISSION_WORKLOADS.map(name => [name, measured[name]]))
+    } : null;
+    return {
+        id: normalized.id,
+        recorded: normalized.recorded,
+        kind: normalized.kind,
+        rendererKind: normalized.rendererKind,
+        renderer: normalized.renderer,
+        classifiedHardware,
+        physicalGpuAttested: attested,
+        readyForOperatorAttestation,
+        eligible,
+        applied: false,
+        movesFrozenBudgets: false,
+        ciGateEnabled: CI_GATE_ENABLED,
+        ciGateJustified: false,
+        excludedFromHardwareBudget: !(normalized.kind === "gpu" && normalized.rendererKind === "hardware"),
+        blockers,
+        requiredWorkloads: GPU_ADMISSION_WORKLOADS.slice(),
+        currentBudgetsMs: { ...GPU_HARDWARE_BUDGETS_MS },
+        proposedBudgetsMs,
+        measuredMs: readyForOperatorAttestation ? { ...measured } : null,
+        recordedOnly,
+        frozenGpuHostIds: FROZEN_GPU_HOSTS.map(host => host.id),
+        hostsAfterAdmission: eligible ? FROZEN_GPU_HOSTS.length + 1 : null,
+        cohortEntry,
+        sourceEdit: eligible ? [
+            "Append cohortEntry to FROZEN_GPU_HOSTS in scripts/benchmark-budgets.js.",
+            "Append each measured p95 to the matching array in GPU_IRIS_XE_P95_MS.",
+            "Update the GPU table in docs/PRODUCTION-WORK.md.",
+            "Leave CI_GATE_ENABLED false. One added host does not justify a CI gate."
+        ] : [],
+        note: "This preview does not edit FROZEN_GPU_HOSTS, GPU_IRIS_XE_P95_MS, or CI_GATE_ENABLED. One added physical GPU host does not enable a CI gate."
+    };
+}
+
+/** Directory view. Every row is unattested, so none of them are eligible. */
+function hardwareAdmissionRoster(samples) {
+    if (!Array.isArray(samples)) throw new Error("sample list must be an array");
+    const rows = samples.map(sample => {
+        const preview = previewHardwareAdmission(sample, { physicalGpuAttested: false });
+        return {
+            id: preview.id,
+            kind: preview.kind,
+            rendererKind: preview.rendererKind,
+            classifiedHardware: preview.classifiedHardware,
+            readyForOperatorAttestation: preview.readyForOperatorAttestation,
+            eligible: false,
+            blockers: preview.blockers
+        };
+    });
+    return {
+        ciGateEnabled: CI_GATE_ENABLED,
+        ciGateJustified: false,
+        frozenGpuHostIds: FROZEN_GPU_HOSTS.map(host => host.id),
+        stored: rows.length,
+        readyForOperatorAttestation: rows.filter(row => row.readyForOperatorAttestation).length,
+        admittedByThisCommand: 0,
         rows
     };
 }
@@ -581,6 +707,7 @@ module.exports = {
     RELEASE_BUDGETS_MS,
     GPU_IRIS_XE_P95_MS,
     GPU_HARDWARE_BUDGETS_MS,
+    GPU_ADMISSION_WORKLOADS,
     FROZEN_CPU_HOSTS,
     FROZEN_GPU_HOSTS,
     FROZEN_SAMPLE_IDS,
@@ -589,6 +716,8 @@ module.exports = {
     RELAY_AGGREGATION,
     normalizeHostSample,
     compareHostSample,
+    previewHardwareAdmission,
+    hardwareAdmissionRoster,
     mergeHostSamples,
     loadHostSampleDirectory,
     hostSampleFromAuthoringReport,

@@ -28,7 +28,7 @@ All five tracks have implementation; this is a bounded production baseline, not 
 
 - `npm run ci`: typecheck, module headers, doc drift, header-claim inventory, mutation-target preflight, complete Jest suite, real writer-process crash tests, build, startup/file/lighting/3D/level-transition/authoring Electron smokes.
 - `npm run smoke:package`: build the Windows NSIS package and launch the unpacked executable for startup and Open/Edit/Save tests. It does not silently install the application on the user's machine.
-- `npm run benchmark:authoring`: informational local measurements, including the mixed soak, noisy 2048 raster and textured scenes; intentionally no hardware-dependent CI failure threshold. `npm run test:benchmark-budgets` locks the budget formula and the rule that extra host samples do not move it. `node scripts/record-benchmark-sample.js` stores a later host beside the frozen budgets.
+- `npm run benchmark:authoring`: informational local measurements, including the mixed soak, noisy 2048 raster and textured scenes; intentionally no hardware-dependent CI failure threshold. `npm run test:benchmark-budgets` locks the budget formula and the rule that extra host samples do not move it. `node scripts/record-benchmark-sample.js` stores a later host beside the frozen budgets. `node scripts/preview-hardware-admission.js` prints a physical-GPU admission and leaves that cohort unchanged.
 - Focused regression suites: `ProjectSession`, `ProjectFileWorkflow`, `projectDependencies`, `asepriteImport`, `CanvasExport`, `GameplayPanel`, `GameplaySession`, `GameExport`, `LevelTransitionWorkflow`, `GltfMotion`, `Collision3D` and `ThreeDInspector`.
 - `smoke:authoring` uses actual Chromium PNG decoding/pixel inspection, silent generated WAV decode/play/stop, and an offline game reaching victory. This is not an audible listening test.
 - Mutation preflight checks all 402 targets still match; it is not equivalent to executing and killing all mutants.
@@ -160,11 +160,28 @@ The command uses the same software-renderer list as `validate:hardware-gpu`. llv
 
 Per-stage GPU names such as `relay-1.vde` are kept on `stageP95Ms`. The sample's `relay` value is the maximum of those stage GPU p95s, the same ceiling rule as the Iris Xe relay budget. CPU submission stays on `cpuSubmissionP95Ms` and is not compared with the GPU budgets.
 
-Admitting a sample means editing `FROZEN_CPU_HOSTS` or `FROZEN_GPU_HOSTS` and the tables in this section. One added hardware GPU host still does not justify a CI gate or a renderer rewrite.
+Admitting a CPU sample means editing `FROZEN_CPU_HOSTS` and the CPU table in this section. Admitting a physical GPU sample follows the preview below. One added hardware GPU host still does not justify a CI gate or a renderer rewrite.
+
+**Admitting a physical GPU sample.** A file under `scripts/benchmark-host-samples/` remains an observation. `node scripts/preview-hardware-admission.js` prints the source edit that would append one GPU sample and does not perform it. `CI_GATE_ENABLED` stays false.
+
+1. Store the GPU report with the command above. On a physical GPU, leave SwiftShader, llvmpipe, and `--enable-unsafe-swiftshader` off.
+2. Preview that file, or list the directory:
+
+```
+node scripts/preview-hardware-admission.js scripts/benchmark-host-samples/<host>-gpu.json
+node scripts/preview-hardware-admission.js --summary
+```
+
+3. `readyForOperatorAttestation` is true only when the renderer string classifies as hardware and `pixel-workshop`, `relay`, and `animated-meshes-100` each have one finite p95. `relay` is the stored maximum stage p95. `proposedBudgetsMs` is the 1.5× preview for those three. Workloads outside them stay in `recordedOnly` and are observations, not new hardware budgets. `cohortEntry` stays empty until step 5.
+4. CPU samples, unavailable WebGL, unrecognized renderers, and software GL stay blocked. The software list is the same one `validate:hardware-gpu` uses: llvmpipe, SwiftShader, softpipe, lavapipe, virgl, and the Microsoft Basic Render Driver. `--physical-gpu` does not reclassify them. Exit status is 0 for an ineligible sample, including software GL, so this command is not a CI failure. `npm run ci` does not run it. Exit status is 1 for invalid JSON, an unknown flag, or `--summary` combined with a sample.
+5. A sample file cannot set `physicalGpu` or `admitsToHardwareBudget`. Pass `--physical-gpu` only when you know the machine is a physical GPU. The renderer string is not that attestation.
+6. When `eligible` is true, append the printed `cohortEntry` to `FROZEN_GPU_HOSTS` and append each measured p95 to the matching array in `GPU_IRIS_XE_P95_MS`. `proposedBudgetsMs` is the 1.5× figure that edit would freeze. Update the GPU table in this section from those figures. Leave `CI_GATE_ENABLED` false. One added physical GPU host still does not justify a CI gate or a renderer rewrite.
+
+The stored 2026-09-28 cloud samples are ineligible. `--summary` reports `readyForOperatorAttestation` 0 for that directory.
 
 **Cloud VM, 2026-09-28.** This environment is Linux x64, 4 vCPU Intel Xeon, 16014 MiB. It is not a physical GPU host. `benchmark:authoring` under Node 22.14.0 with `--expose-gc` is stored as `linux-x64-xeon-cloud-2026-09-28-cpu`. That file is a later measurement, not a second copy of the frozen Xeon cohort, and the frozen CPU table above was not edited. Rows over the frozen CPU budget were 100 animated meshes 17.282 ms (budget 3.9), 100 gameplay steps 7.427 ms (6.7), Signal Garden frame 1.739 ms (1.7), 1024 raster decode 7.897 ms (5.8), and 80 textured billboards 1.133 ms (0.6). The other CPU rows were inside the frozen budget.
 
-Plain `benchmark:gpu` on Electron 43.2.0 / Chromium 150 (that process reports Node 24.18.0) found WebGL1 blocklisted. `linux-x64-xeon-cloud-2026-09-28-gpu-unavailable` has an empty timing map. Rerunning with `--ignore-gpu-blocklist --enable-unsafe-swiftshader` produced `ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL 4.5)`, stored as `linux-x64-xeon-cloud-2026-09-28-llvmpipe` with `rendererKind: "software"`. GPU p95 was Signal Garden 17.535 ms, relay ceiling 5.247 ms (stages 3.459 / 2.226 / 5.247), 100 meshes 11.341 ms, textured rasters 10.462 ms, and 80 billboards 30.429 ms. CPU submission for the 100 meshes was 267.1 ms. The mesh and billboard GPU p95s each omit one invalid timer sample. None of these figures were admitted. Hardware GPU budgets remain Signal Garden 3.2 ms, relay 3.5 ms, and 100 meshes 2.8 ms. This run does not add a physical GPU host, a CI gate, or a reason to rewrite the renderer.
+Plain `benchmark:gpu` on Electron 43.2.0 / Chromium 150 (that process reports Node 24.18.0) found WebGL1 blocklisted. `linux-x64-xeon-cloud-2026-09-28-gpu-unavailable` has an empty timing map. Rerunning with `--ignore-gpu-blocklist --enable-unsafe-swiftshader` produced `ANGLE (Mesa, llvmpipe (LLVM 20.1.2 256 bits), OpenGL 4.5)`, stored as `linux-x64-xeon-cloud-2026-09-28-llvmpipe` with `rendererKind: "software"`. GPU p95 was Signal Garden 17.535 ms, relay ceiling 5.247 ms (stages 3.459 / 2.226 / 5.247), 100 meshes 11.341 ms, textured rasters 10.462 ms, and 80 billboards 30.429 ms. CPU submission for the 100 meshes was 267.1 ms. The mesh and billboard GPU p95s each omit one invalid timer sample. None of these figures were admitted. Hardware GPU budgets remain Signal Garden 3.2 ms, relay 3.5 ms, and 100 meshes 2.8 ms. `preview-hardware-admission.js --summary` reports these three files ineligible for a physical-GPU admission. This run does not add a physical GPU host, a CI gate, or a reason to rewrite the renderer.
 
 ## Initial local budgets
 

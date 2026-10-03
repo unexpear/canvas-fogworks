@@ -10,8 +10,8 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const {
     calibrateMs, soakRetainedAccounted, soakTailPlateaued, RECORDED_P95_MS, RELEASE_BUDGETS_MS,
-    GPU_IRIS_XE_P95_MS, GPU_HARDWARE_BUDGETS_MS, FROZEN_CPU_HOSTS, FROZEN_GPU_HOSTS, CI_GATE_ENABLED,
-    normalizeHostSample, compareHostSample, mergeHostSamples, loadHostSampleDirectory,
+    GPU_IRIS_XE_P95_MS, GPU_HARDWARE_BUDGETS_MS, GPU_ADMISSION_WORKLOADS, FROZEN_CPU_HOSTS, FROZEN_GPU_HOSTS, CI_GATE_ENABLED,
+    normalizeHostSample, compareHostSample, previewHardwareAdmission, hardwareAdmissionRoster, mergeHostSamples, loadHostSampleDirectory,
     hostSampleFromAuthoringReport, hostSampleFromGpuReport, hostSampleFromBenchmarkReport
 } = require("./benchmark-budgets");
 
@@ -66,7 +66,18 @@ test("frozen cohort is exactly the budget input", () => {
         assert.deepEqual([...grouped[name]].sort((a, b) => a - b), [...samples].sort((a, b) => a - b), name);
     }
     assert.equal(FROZEN_GPU_HOSTS.length, 1);
+    assert.deepEqual([...GPU_ADMISSION_WORKLOADS].sort(), Object.keys(GPU_HARDWARE_BUDGETS_MS).sort());
+    const gpuGrouped = {};
+    for (const host of FROZEN_GPU_HOSTS) {
+        assert.equal(host.kind, "gpu");
+        assert.equal(host.rendererKind, "hardware");
+        for (const [name, value] of Object.entries(host.p95Ms)) {
+            gpuGrouped[name] = (gpuGrouped[name] ?? []).concat(Array.isArray(value) ? value : [value]);
+        }
+    }
+    assert.deepEqual(Object.keys(gpuGrouped).sort(), Object.keys(GPU_IRIS_XE_P95_MS).sort());
     for (const [name, samples] of Object.entries(GPU_IRIS_XE_P95_MS)) {
+        assert.deepEqual([...gpuGrouped[name]].sort((a, b) => a - b), [...samples].sort((a, b) => a - b), name);
         assert.deepEqual(samples, [FROZEN_GPU_HOSTS[0].p95Ms[name]], name);
     }
     RELEASE_BUDGETS_MS["rect-250-frame"] = 1;
@@ -278,6 +289,139 @@ test("the record command writes a software sample without failing the budget", (
     assert.equal(changed.status, 1);
     assert.match(changed.stderr, /different sample/);
     fs.rmSync(directory, { recursive: true, force: true });
+});
+
+function physicalGpuReport(p95) {
+    const renderer = "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)";
+    return hostSampleFromGpuReport({
+        available: true,
+        results: [
+            { name: "pixel-workshop", renderer, gpuP95Ms: p95.workshop, cpuSubmissionP95Ms: 1 },
+            { name: "relay-1.vde", renderer, gpuP95Ms: p95.relay[0] },
+            { name: "relay-2.vde", renderer, gpuP95Ms: p95.relay[1] },
+            { name: "animated-meshes-100", renderer, gpuP95Ms: p95.meshes },
+            { name: "textured-rasters", renderer, gpuP95Ms: 12 }
+        ]
+    }, { id: "mike-iris-xe-2026-10-02", recorded: "2026-10-02" });
+}
+
+test("a hardware GPU preview stays unapplied until the operator attests a physical machine", () => {
+    const cpuBefore = JSON.stringify(RELEASE_BUDGETS_MS);
+    const gpuBefore = JSON.stringify(GPU_HARDWARE_BUDGETS_MS);
+    const sample = physicalGpuReport({ workshop: 4, relay: [1, 3], meshes: 1 });
+    const held = previewHardwareAdmission(sample, { physicalGpuAttested: false });
+    assert.equal(held.classifiedHardware, true);
+    assert.equal(held.readyForOperatorAttestation, true);
+    assert.equal(held.eligible, false);
+    assert.equal(held.applied, false);
+    assert.equal(held.ciGateEnabled, false);
+    assert.equal(held.ciGateJustified, false);
+    assert.equal(held.cohortEntry, null);
+    assert.deepEqual(held.sourceEdit, []);
+    assert.equal(held.proposedBudgetsMs["pixel-workshop"], calibrateMs([2.076, 4]));
+    assert.equal(held.proposedBudgetsMs.relay, calibrateMs([2.312, 3]));
+    assert.equal(held.proposedBudgetsMs["animated-meshes-100"], 2.8);
+    assert.deepEqual(held.recordedOnly, ["textured-rasters"]);
+    assert.match(held.blockers.join("\n"), /physical GPU/);
+    const admitted = previewHardwareAdmission(sample, { physicalGpuAttested: true });
+    assert.equal(admitted.eligible, true);
+    assert.equal(admitted.applied, false);
+    assert.equal(admitted.movesFrozenBudgets, false);
+    assert.equal(admitted.ciGateJustified, false);
+    assert.equal(admitted.hostsAfterAdmission, FROZEN_GPU_HOSTS.length + 1);
+    assert.equal(admitted.cohortEntry.rendererKind, "hardware");
+    assert.equal(admitted.cohortEntry.p95Ms["pixel-workshop"], 4);
+    assert.equal(admitted.cohortEntry.p95Ms.relay, 3);
+    assert.equal(admitted.cohortEntry.p95Ms["textured-rasters"], undefined);
+    assert.equal(admitted.sourceEdit.length > 0, true);
+    assert.equal(JSON.stringify(RELEASE_BUDGETS_MS), cpuBefore);
+    assert.equal(JSON.stringify(GPU_HARDWARE_BUDGETS_MS), gpuBefore);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS["pixel-workshop"], 3.2);
+});
+
+test("software GL and the stored cloud samples stay out of hardware admission", () => {
+    const software = hostSampleFromGpuReport({
+        available: true,
+        results: [{ name: "pixel-workshop", renderer: "llvmpipe (LLVM 20.1.2, 256 bits)", gpuP95Ms: 80 }]
+    }, { id: "cloud-llvmpipe-again", recorded: "2026-09-28" });
+    const forced = previewHardwareAdmission(software, { physicalGpuAttested: true });
+    assert.equal(forced.eligible, false);
+    assert.equal(forced.readyForOperatorAttestation, false);
+    assert.equal(forced.proposedBudgetsMs, null);
+    assert.equal(forced.cohortEntry, null);
+    assert.equal(forced.ciGateEnabled, false);
+    assert.match(forced.blockers.join("\n"), /software GL/);
+    assert.match(forced.blockers.join("\n"), /cannot reclassify/);
+    const missing = hostSampleFromGpuReport({
+        available: true,
+        results: [{
+            name: "pixel-workshop",
+            renderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            gpuP95Ms: 4
+        }]
+    }, { id: "partial-iris", recorded: "2026-10-02" });
+    const incomplete = previewHardwareAdmission(missing, { physicalGpuAttested: true });
+    assert.equal(incomplete.eligible, false);
+    assert.equal(incomplete.proposedBudgetsMs, null);
+    assert.match(incomplete.blockers.join("\n"), /missing required workload relay/);
+    assert.throws(() => normalizeHostSample({
+        ...software,
+        physicalGpu: true
+    }), /cannot attest/);
+    const roster = hardwareAdmissionRoster(loadHostSampleDirectory(path.join(__dirname, "benchmark-host-samples")));
+    assert.equal(roster.ciGateEnabled, false);
+    assert.equal(roster.ciGateJustified, false);
+    assert.equal(roster.admittedByThisCommand, 0);
+    assert.equal(roster.readyForOperatorAttestation, 0);
+    assert.equal(roster.stored >= 3, true);
+    const byId = Object.fromEntries(roster.rows.map(row => [row.id, row]));
+    assert.equal(byId["linux-x64-xeon-cloud-2026-09-28-cpu"].classifiedHardware, false);
+    assert.match(byId["linux-x64-xeon-cloud-2026-09-28-cpu"].blockers.join("\n"), /cpu sample/);
+    assert.match(byId["linux-x64-xeon-cloud-2026-09-28-gpu-unavailable"].blockers.join("\n"), /unavailable WebGL/);
+    assert.match(byId["linux-x64-xeon-cloud-2026-09-28-llvmpipe"].blockers.join("\n"), /software GL/);
+    for (const row of roster.rows) {
+        assert.equal(row.eligible, false);
+        assert.equal(row.classifiedHardware, false);
+    }
+    assert.equal(GPU_HARDWARE_BUDGETS_MS["pixel-workshop"], 3.2);
+});
+
+test("the admission preview command exits 0 for software GL and does not edit budgets", () => {
+    const source = fs.readFileSync(path.join(__dirname, "preview-hardware-admission.js"), "utf8");
+    assert.equal(/writeFile|mkdir|CI_GATE_ENABLED\s*=/.test(source), false);
+    const summary = spawnSync(process.execPath, [path.join(__dirname, "preview-hardware-admission.js"), "--summary"], { encoding: "utf8" });
+    assert.equal(summary.status, 0, summary.stderr);
+    const roster = JSON.parse(summary.stdout);
+    assert.equal(roster.readyForOperatorAttestation, 0);
+    assert.equal(roster.ciGateEnabled, false);
+    assert.equal(roster.admittedByThisCommand, 0);
+    const software = spawnSync(process.execPath, [
+        path.join(__dirname, "preview-hardware-admission.js"),
+        path.join(__dirname, "benchmark-host-samples", "linux-x64-xeon-cloud-2026-09-28-llvmpipe.json"),
+        "--physical-gpu"
+    ], { encoding: "utf8" });
+    assert.equal(software.status, 0, software.stderr);
+    const printed = JSON.parse(software.stdout);
+    assert.equal(printed.preview.eligible, false);
+    assert.equal(printed.preview.applied, false);
+    assert.equal(printed.movesFrozenBudgets, false);
+    assert.equal(printed.ciGateEnabled, false);
+    assert.match(printed.preview.blockers.join("\n"), /software GL/);
+    const refused = spawnSync(process.execPath, [
+        path.join(__dirname, "preview-hardware-admission.js"),
+        "--summary",
+        "--physical-gpu"
+    ], { encoding: "utf8" });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /--summary/);
+    const apply = spawnSync(process.execPath, [
+        path.join(__dirname, "preview-hardware-admission.js"),
+        "--id", "linux-x64-xeon-cloud-2026-09-28-llvmpipe",
+        "--apply"
+    ], { encoding: "utf8" });
+    assert.equal(apply.status, 1);
+    assert.match(apply.stderr, /unknown argument/);
+    assert.equal(GPU_HARDWARE_BUDGETS_MS.relay, 3.5);
 });
 
 test("accounted soak growth follows new snapshots and allows a trim drop", () => {

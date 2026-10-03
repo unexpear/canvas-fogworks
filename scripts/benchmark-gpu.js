@@ -103,7 +103,8 @@ app.whenReady().then(async () => {
             ...(unavailable ? { available: false, reason: payload.reason, results: [] } : { available: true, results: payload }),
             notes: ["Warmed samples (20, or fewer for the larger textured scenes). CPU submission excludes frame construction; GPU queries exclude CPU work and presentation.",
                 "A missing WebGL context is unavailable, not a zero time. Unsupported or disjoint GPU timings are null. No hardware-independent release threshold is asserted.",
-                "hostSample labels the renderer as hardware, software, unavailable, or unknown. Software GL is excluded from hardware budgets. Recording the sample does not move the frozen Iris Xe budgets."] };
+                "hostSample labels the renderer as hardware, software, unavailable, or unknown. Software GL is excluded from hardware budgets. Recording the sample does not move the frozen Iris Xe budgets.",
+                "scripts/preview-hardware-admission.js prints a later physical-GPU admission and leaves FROZEN_GPU_HOSTS unchanged. Software GL stays ineligible."] };
         report.hostSample = budgets.hostSampleFromGpuReport(report, { recorded: new Date().toISOString().slice(0, 10) });
         report.budgetComparison = budgets.compareHostSample(report.hostSample);
         console.log(JSON.stringify(report, null, 2));
