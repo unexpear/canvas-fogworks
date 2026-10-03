@@ -283,6 +283,105 @@ test("a failed payload flush rolls the created files back", async () => {
     } finally { spy.mockRestore(); }
 });
 
+test("a filesSynced journal keeps the copied files and removes only itself", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    mkdirSync(join(dest, "models"));
+    writeFileSync(join(dest, "models", "shape.bin"), "owned mesh");
+    writeFileSync(join(dest, "color.png"), "owned texture");
+    writeFileSync(join(dest, DEPENDENCY_JOURNAL_NAME), JSON.stringify({
+        version: 1, directories: ["models"], files: ["models/shape.bin", "color.png"], filesSynced: true
+    }));
+    expect(await rollbackDependencyJournal(dest)).toBe(true);
+    expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+    expect(readFileSync(join(dest, "models", "shape.bin"), "utf8")).toBe("owned mesh");
+    expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+    expect(existsSync(join(dest, "models"))).toBe(true);
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+});
+
+test("a filesSynced journal still cannot name a path outside the destination", async () => {
+    const outside = join(dir, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret"), "safe");
+    writeFileSync(join(dest, "color.png"), "owned texture");
+    writeFileSync(join(dest, DEPENDENCY_JOURNAL_NAME), JSON.stringify({
+        version: 1, directories: [], files: ["../outside/secret"], filesSynced: true
+    }));
+    await expect(rollbackDependencyJournal(dest)).rejects.toThrow(/journal/);
+    expect(readFileSync(join(outside, "secret"), "utf8")).toBe("safe");
+    expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(true);
+});
+
+test("a journal with an invalid filesSynced flag is refused before any delete", async () => {
+    writeFileSync(join(dest, "color.png"), "keep");
+    writeFileSync(join(dest, DEPENDENCY_JOURNAL_NAME), JSON.stringify({
+        version: 1, directories: [], files: ["color.png"], filesSynced: false
+    }));
+    await expect(rollbackDependencyJournal(dest)).rejects.toThrow(/journal/);
+    expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("keep");
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(true);
+});
+
+test("payload file flushes finish before the filesSynced journal replaces the in-progress record", async () => {
+    const atomic = require("./atomicWrite");
+    const events: string[] = [];
+    const realSyncFile = atomic.syncFile.bind(atomic);
+    const realAtomicWrite = atomic.atomicWrite.bind(atomic);
+    const realUnlink = promises.unlink.bind(promises);
+    const fileSpy = jest.spyOn(atomic, "syncFile").mockImplementation(async (file: unknown) => {
+        events.push(`sync:${basename(String(file))}`);
+        return realSyncFile(file);
+    });
+    const writeSpy = jest.spyOn(atomic, "atomicWrite").mockImplementation(async (target: unknown, data: unknown, io: unknown) => {
+        events.push(String(data).includes('"filesSynced":true') ? "journal:filesSynced" : "journal:progress");
+        return realAtomicWrite(target, data, io);
+    });
+    const unlinkSpy = jest.spyOn(promises, "unlink").mockImplementation(async (file) => {
+        if (basename(String(file)) === DEPENDENCY_JOURNAL_NAME) events.push("unlink:journal");
+        return realUnlink(file);
+    });
+    try {
+        await copy();
+        const progress = events.indexOf("journal:progress");
+        const synced = events.indexOf("journal:filesSynced");
+        const unlinkAt = events.indexOf("unlink:journal");
+        expect(progress).toBeGreaterThanOrEqual(0);
+        expect(synced).toBeGreaterThan(progress);
+        expect(unlinkAt).toBeGreaterThan(synced);
+        for (const name of ["shape.gltf", "shape.bin", "color.png"]) {
+            const at = events.indexOf(`sync:${name}`);
+            expect(at).toBeGreaterThanOrEqual(0);
+            expect(at).toBeLessThan(synced);
+        }
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+        expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+    } finally {
+        fileSpy.mockRestore();
+        writeSpy.mockRestore();
+        unlinkSpy.mockRestore();
+    }
+});
+
+test("a failure after the filesSynced record is on disk does not delete the copied files", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    const atomic = require("./atomicWrite");
+    const real = atomic.atomicWrite.bind(atomic);
+    const spy = jest.spyOn(atomic, "atomicWrite").mockImplementation(async (target: unknown, data: unknown, io: unknown) => {
+        const result = await real(target, data, io);
+        if (String(data).includes('"filesSynced":true')) throw new Error("commit checkpoint failed");
+        return result;
+    });
+    try {
+        await expect(copy()).rejects.toThrow("commit checkpoint failed");
+        expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+        expect(readFileSync(join(dest, "models", "shape.bin"), "utf8")).toBe("owned mesh");
+        expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+        expect(existsSync(join(dest, "models"))).toBe(true);
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+    } finally { spy.mockRestore(); }
+});
+
 test("a refused directory flush still finishes the copy without claiming that checkpoint", async () => {
     const atomic = require("./atomicWrite");
     const spy = jest.spyOn(atomic, "syncDirectory").mockResolvedValue(false);

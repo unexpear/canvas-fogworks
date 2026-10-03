@@ -2,7 +2,7 @@
  * @module projectDependencies
  * @description Relocates bounded linked-level graphs, relative images and 3D sidecars without copying unreferenced packs or overwriting conflicting files.
  * An incomplete copy deletes only the destination files and directories that copy created. A killed copy leaves a journal the next cross-folder Save As rolls back.
- * Created files are flushed before that journal is removed. An unclean journal write's temporary file is removed on the next rollback. Power-loss durability is not claimed.
+ * Created file bytes are flushed, then the journal is replaced with a filesSynced record, before that name is removed. A journal that still says filesSynced keeps those copies and removes only itself. filesSynced means the file sync calls returned; it is not a directory-fsync or power-loss proof. An unclean journal write's temporary file is removed on the next rollback.
  */
 const fs = require("fs");
 const path = require("path");
@@ -28,7 +28,8 @@ function assertJournalRelative(relative) {
 
 /**
  * Remove a crashed copy's created files and directories, then the journal.
- * Missing pieces are already gone. A path that leaves the destination is refused before any delete.
+ * A filesSynced journal keeps those copies and removes only itself. Missing pieces are already gone.
+ * A path that leaves the destination is refused before any delete.
  */
 async function rollbackDependencyJournal(destinationRoot) {
     const journalFile = journalPath(destinationRoot);
@@ -37,24 +38,30 @@ async function rollbackDependencyJournal(destinationRoot) {
     try { raw = await fs.promises.readFile(journalFile, "utf8"); }
     catch (error) { if (error.code === "ENOENT") return false; throw error; }
     const journal = JSON.parse(raw);
-    if (!journal || journal.version !== 1 || !Array.isArray(journal.directories) || !Array.isArray(journal.files)) {
+    if (!journal || journal.version !== 1 || !Array.isArray(journal.directories) || !Array.isArray(journal.files)
+        || (journal.filesSynced !== undefined && journal.filesSynced !== true)) {
         throw new Error("Invalid dependency rollback journal.");
     }
     for (const relative of journal.files) assertJournalRelative(relative);
     for (const relative of journal.directories) assertJournalRelative(relative);
-    for (const relative of [...journal.files].reverse()) {
-        const parent = path.dirname(path.join(destinationRoot, relative));
-        if (!fs.existsSync(parent)) continue;
-        const target = resolveConfined(destinationRoot, destinationRoot, relative, "a rolled-back dependency");
-        await fs.promises.unlink(target).catch(error => { if (error.code !== "ENOENT") throw error; });
-    }
-    for (const relative of [...journal.directories].reverse()) {
-        const parent = path.dirname(path.join(destinationRoot, relative));
-        if (!fs.existsSync(parent)) continue;
-        const target = resolveConfined(destinationRoot, destinationRoot, relative, "a rolled-back directory");
-        await fs.promises.rmdir(target).catch(error => {
-            if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
-        });
+    // The flag is written only after payload file sync() returned. Deleting those copies would
+    // turn a journal that came back after the name was removed into data loss. Absence of the
+    // flag is still an in-progress copy. The flag does not prove the directory entry stuck.
+    if (journal.filesSynced !== true) {
+        for (const relative of [...journal.files].reverse()) {
+            const parent = path.dirname(path.join(destinationRoot, relative));
+            if (!fs.existsSync(parent)) continue;
+            const target = resolveConfined(destinationRoot, destinationRoot, relative, "a rolled-back dependency");
+            await fs.promises.unlink(target).catch(error => { if (error.code !== "ENOENT") throw error; });
+        }
+        for (const relative of [...journal.directories].reverse()) {
+            const parent = path.dirname(path.join(destinationRoot, relative));
+            if (!fs.existsSync(parent)) continue;
+            const target = resolveConfined(destinationRoot, destinationRoot, relative, "a rolled-back directory");
+            await fs.promises.rmdir(target).catch(error => {
+                if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+            });
+        }
     }
     await fs.promises.unlink(journalFile);
     // The names are gone from this process. A refused directory flush is not a power-loss checkpoint.
@@ -263,6 +270,11 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
             }
         }
         await flushCreatedDependencies(destinationRoot, journal);
+        // Replace the in-progress journal only after those file syncs returned. Rollback of a
+        // record that still says filesSynced must not delete the copies. The replacement is
+        // file-flushed by atomicWrite before rename; its directory flush is not a power-loss proof.
+        journal.filesSynced = true;
+        await persistJournal();
         await fs.promises.unlink(journalPath(destinationRoot));
         await atomic.syncDirectory(destinationRoot);
     } catch (error) {

@@ -1,13 +1,16 @@
 # Testing Strategy
 
-Project recovery (2026-09-28): browser restore, a newer-explicit-save refusal, and dependency-copy
+Project recovery (2026-10-02): browser restore, a newer-explicit-save refusal, and dependency-copy
 rollback are covered in Jest. `smoke:crash-relaunch` kills the built Electron editor after a real
 recovery checkpoint and relaunches it twice, once to restore and once to discard, without rewriting
 the project file. `test:recovery` kills the isolated writer at editing, partial-write, file-flush,
 pre-rename, post-rename and post-directory-fsync checkpoints, then checks that the next replacement
-removes a temporary file left by a killed partial write. The post-rename kill still sees the new
-bytes and is not a power-loss proof, because the directory entry was not flushed. Power-loss
-durability is not claimed. `npm run test:progress-crash` is the separate gameplay-slot check:
+removes a temporary file left by a killed partial write. It also kills a dependency copy on a torn
+payload, before and after the filesSynced journal's directory flush, and after that journal name
+is removed. A torn copy is rolled back. A filesSynced journal keeps the copied bytes, including
+when the test plants that record after the name was removed. The post-rename kill still sees the
+new bytes and is not a power-loss proof, because the directory entry was not flushed. Planting the
+journal is not a power-loss proof either. Power-loss durability is not claimed. `npm run test:progress-crash` is the separate gameplay-slot check:
 it kills that writer at partial-write, flush, pre-rename, post-rename and directory-fsync, then
 parses the last committed progress record in a fresh process. It is not an Electron renderer crash.
 See [Production workflows](PRODUCTION-WORK.md).
@@ -46,8 +49,10 @@ samples under `scripts/benchmark-host-samples/` do not move it. Software GL stay
 not a hardware budget. Workloads, limits and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
-<!-- re-read 2026-10-02: test:progress-crash covers the gameplay progress slot. 3D export can stamp
-     saveMigrations. The Jest contract is otherwise unchanged. -->
+<!-- re-read 2026-10-02: dependency copies now write a filesSynced journal after payload file
+     flushes, and test:recovery kills at those checkpoints. A filesSynced journal keeps the copies.
+     That flag is not a power-loss proof. test:progress-crash covers the gameplay progress slot.
+     3D export can stamp saveMigrations. The rest of this testing contract is unchanged. -->
 <!-- re-read 2026-09-28: player HTML and the 3D host expose named-input Controls. World3D, the 3D
      player host and player-acceptance also cover embedded cues and screen-space overlay text.
      FoldersDrawer stays extracted. The Jest contract and shell source pins are otherwise unchanged. -->

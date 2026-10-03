@@ -1,11 +1,12 @@
 /**
  * @module crash-recovery.test
- * @description Kills isolated real writer processes at editing/save checkpoints and restores in a fresh process using the production session and atomic writer.
- * The directory-fsync kill is still a process failure, not a power-loss proof.
+ * @description Kills isolated real writer processes at editing/save and dependency-copy checkpoints, then restores in a fresh process using the production session, atomic writer and dependency copier.
+ * The directory-fsync kill is still a process failure, not a power-loss proof. Planting a filesSynced journal after its name was removed is not a power-loss proof either.
  */
 const fs = require("fs"), path = require("path"), os = require("os");
 const { fork, spawnSync } = require("child_process");
 const { atomicWrite } = require("../src/electron/atomicWrite");
+const { copyProjectDependencies, DEPENDENCY_JOURNAL_NAME } = require("../src/electron/projectDependencies");
 
 function sessionApi() {
     const Module = require("module"), esbuild = require("esbuild");
@@ -18,7 +19,74 @@ function sessionApi() {
     return loaded.exports;
 }
 
+const dependencyContent = JSON.stringify({ document: { assets3d: [{ kind: "mesh", source: "models/shape.gltf" },
+    { kind: "material", source: "models/shape.gltf#material-0" }] } });
+
+async function dependencyCheckpoint(mode, dir) {
+    const source = path.join(dir, "source"), dest = path.join(dir, "destination");
+    const pause = async () => {
+        process.send({ ready: true });
+        await new Promise(() => { setInterval(() => {}, 1000); });
+    };
+    if (mode !== "dep-repair") {
+        fs.mkdirSync(path.join(source, "models"), { recursive: true });
+        fs.mkdirSync(dest, { recursive: true });
+        fs.writeFileSync(path.join(source, "models", "shape.gltf"), JSON.stringify({ asset: { version: "2.0" },
+            buffers: [{ uri: "shape.bin" }], images: [{ uri: "../color.png" }] }));
+        fs.writeFileSync(path.join(source, "models", "shape.bin"), "owned mesh");
+        fs.writeFileSync(path.join(source, "color.png"), "owned texture");
+        fs.writeFileSync(path.join(dest, "notes.txt"), "keep");
+        const atomic = require("../src/electron/atomicWrite");
+        const realWrite = atomic.atomicWrite.bind(atomic);
+        if (mode === "dep-partial") {
+            const writeFile = fs.promises.writeFile.bind(fs.promises);
+            fs.promises.writeFile = async (file, data, options) => {
+                if (path.basename(String(file)) === "color.png") {
+                    await writeFile(file, Buffer.from("PARTIAL"), options);
+                    await pause();
+                }
+                return writeFile(file, data, options);
+            };
+        } else if (mode === "dep-commit-before-dirsync") {
+            atomic.atomicWrite = async (target, data, io) => {
+                if (!String(data).includes('"filesSynced":true')) return realWrite(target, data, io);
+                const wrapped = {
+                    stat: fs.promises.stat.bind(fs.promises),
+                    rename: fs.promises.rename.bind(fs.promises),
+                    unlink: fs.promises.unlink.bind(fs.promises),
+                    readdir: fs.promises.readdir.bind(fs.promises),
+                    open: async (file, ...args) => {
+                        const handle = await fs.promises.open(file, ...args);
+                        if (file !== path.dirname(target)) return handle;
+                        return {
+                            sync: async () => { await pause(); return handle.sync(); },
+                            close: () => handle.close()
+                        };
+                    }
+                };
+                return realWrite(target, data, wrapped);
+            };
+        } else if (mode === "dep-commit-dirsynced") {
+            atomic.atomicWrite = async (target, data, io) => {
+                const result = await realWrite(target, data, io);
+                if (String(data).includes('"filesSynced":true')) await pause();
+                return result;
+            };
+        } else if (mode === "dep-unlinked") {
+            const unlink = fs.promises.unlink.bind(fs.promises);
+            fs.promises.unlink = async (file, ...args) => {
+                const result = await unlink(file, ...args);
+                if (path.basename(String(file)) === DEPENDENCY_JOURNAL_NAME) await pause();
+                return result;
+            };
+        }
+    }
+    await copyProjectDependencies(path.join(source, "project.vde"), path.join(dest, "copy.vde"), dependencyContent);
+    if (mode !== "dep-repair") throw new Error("Crash checkpoint was not reached");
+}
+
 async function child(mode, dir) {
+    if (mode.startsWith("dep-")) return dependencyCheckpoint(mode, dir);
     const { ProjectSession, createEmptyDocument, serializeDocument, deserializeDocument } = sessionApi();
     const project = path.join(dir, "project.vde"), recovery = path.join(dir, "project-recovery.json");
     if (mode === "replace") {
@@ -110,6 +178,44 @@ if (process.argv[2] === "--child") {
                 assert.deepEqual(JSON.parse(restored.stdout), { saved: renamed.has(phase) ? "recoverable edit" : "last saved",
                     savedBytes: renamed.has(phase) ? "after" : "before",
                     recovered: "recoverable edit", dirty: true });
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        });
+    }
+    for (const phase of ["dep-partial", "dep-commit-before-dirsync", "dep-commit-dirsynced", "dep-unlinked"]) {
+        test(`forced process exit: ${phase}`, { timeout: 20000 }, async () => {
+            const dir = await killAt(phase);
+            const dest = path.join(dir, "destination");
+            const journal = path.join(dest, DEPENDENCY_JOURNAL_NAME);
+            try {
+                if (phase === "dep-partial") {
+                    const parsed = JSON.parse(fs.readFileSync(journal, "utf8"));
+                    assert.notEqual(parsed.filesSynced, true);
+                    assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "PARTIAL");
+                } else if (phase === "dep-unlinked") {
+                    assert.equal(fs.existsSync(journal), false);
+                    assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "owned texture");
+                    // The name is gone in this process. Putting the flushed record back simulates a
+                    // directory entry that returned; it does not unplug the disk.
+                    fs.writeFileSync(journal, JSON.stringify({
+                        version: 1, directories: ["models"],
+                        files: ["models/shape.gltf", "models/shape.bin", "color.png"], filesSynced: true
+                    }));
+                } else {
+                    const parsed = JSON.parse(fs.readFileSync(journal, "utf8"));
+                    assert.equal(parsed.filesSynced, true);
+                    assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "owned texture");
+                    assert.equal(fs.readFileSync(path.join(dest, "models", "shape.bin"), "utf8"), "owned mesh");
+                }
+                assert.equal(fs.readFileSync(path.join(dest, "notes.txt"), "utf8"), "keep");
+                const repaired = spawnSync(process.execPath, [__filename, "--child", "dep-repair", dir], { encoding: "utf8", timeout: 10000, windowsHide: true });
+                assert.equal(repaired.status, 0, repaired.stderr);
+                assert.equal(fs.readFileSync(path.join(dest, "notes.txt"), "utf8"), "keep");
+                assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "owned texture");
+                assert.equal(fs.readFileSync(path.join(dest, "models", "shape.bin"), "utf8"), "owned mesh");
+                assert.equal(fs.readFileSync(path.join(dest, "models", "shape.gltf"), "utf8").includes('"shape.bin"'), true);
+                assert.equal(fs.existsSync(journal), false);
             } finally {
                 fs.rmSync(dir, { recursive: true, force: true });
             }
