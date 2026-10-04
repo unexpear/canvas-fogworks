@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import { basename, join } from "path";
-const { copyProjectDependencies, rollbackDependencyJournal, DEPENDENCY_JOURNAL_NAME } = require("./projectDependencies");
+const { copyProjectDependencies, rollbackDependencyJournal, readDependencyJournal, DEPENDENCY_JOURNAL_NAME } = require("./projectDependencies");
 
 let dir: string, source: string, dest: string;
 beforeEach(() => {
@@ -323,11 +323,12 @@ test("a journal with an invalid filesSynced flag is refused before any delete", 
     expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(true);
 });
 
-test("payload file flushes finish before the filesSynced journal replaces the in-progress record", async () => {
+test("payload file flushes finish before the filesSynced record is appended", async () => {
     const atomic = require("./atomicWrite");
     const events: string[] = [];
     const realSyncFile = atomic.syncFile.bind(atomic);
     const realAtomicWrite = atomic.atomicWrite.bind(atomic);
+    const realAppend = atomic.appendFileSynced.bind(atomic);
     const realUnlink = promises.unlink.bind(promises);
     const fileSpy = jest.spyOn(atomic, "syncFile").mockImplementation(async (file: unknown) => {
         events.push(`sync:${basename(String(file))}`);
@@ -336,6 +337,10 @@ test("payload file flushes finish before the filesSynced journal replaces the in
     const writeSpy = jest.spyOn(atomic, "atomicWrite").mockImplementation(async (target: unknown, data: unknown, io: unknown) => {
         events.push(String(data).includes('"filesSynced":true') ? "journal:filesSynced" : "journal:progress");
         return realAtomicWrite(target, data, io);
+    });
+    const appendSpy = jest.spyOn(atomic, "appendFileSynced").mockImplementation(async (target: unknown, data: unknown, io: unknown) => {
+        events.push(String(data).includes('"filesSynced":true') ? "journal:filesSynced" : "journal:append");
+        return realAppend(target, data, io);
     });
     const unlinkSpy = jest.spyOn(promises, "unlink").mockImplementation(async (file) => {
         if (basename(String(file)) === DEPENDENCY_JOURNAL_NAME) events.push("unlink:journal");
@@ -348,6 +353,7 @@ test("payload file flushes finish before the filesSynced journal replaces the in
         const unlinkAt = events.indexOf("unlink:journal");
         expect(progress).toBeGreaterThanOrEqual(0);
         expect(synced).toBeGreaterThan(progress);
+        expect(events.filter(event => event === "journal:filesSynced")).toEqual(["journal:filesSynced"]);
         expect(unlinkAt).toBeGreaterThan(synced);
         for (const name of ["shape.gltf", "shape.bin", "color.png"]) {
             const at = events.indexOf(`sync:${name}`);
@@ -359,6 +365,7 @@ test("payload file flushes finish before the filesSynced journal replaces the in
     } finally {
         fileSpy.mockRestore();
         writeSpy.mockRestore();
+        appendSpy.mockRestore();
         unlinkSpy.mockRestore();
     }
 });
@@ -366,8 +373,8 @@ test("payload file flushes finish before the filesSynced journal replaces the in
 test("a failure after the filesSynced record is on disk does not delete the copied files", async () => {
     writeFileSync(join(dest, "notes.txt"), "keep");
     const atomic = require("./atomicWrite");
-    const real = atomic.atomicWrite.bind(atomic);
-    const spy = jest.spyOn(atomic, "atomicWrite").mockImplementation(async (target: unknown, data: unknown, io: unknown) => {
+    const real = atomic.appendFileSynced.bind(atomic);
+    const spy = jest.spyOn(atomic, "appendFileSynced").mockImplementation(async (target: unknown, data: unknown, io: unknown) => {
         const result = await real(target, data, io);
         if (String(data).includes('"filesSynced":true')) throw new Error("commit checkpoint failed");
         return result;
@@ -378,6 +385,72 @@ test("a failure after the filesSynced record is on disk does not delete the copi
         expect(readFileSync(join(dest, "models", "shape.bin"), "utf8")).toBe("owned mesh");
         expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
         expect(existsSync(join(dest, "models"))).toBe(true);
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+    } finally { spy.mockRestore(); }
+});
+
+test("discarding the journal unlink before directory flush returns keeps the filesSynced record", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    const atomic = require("./atomicWrite");
+    const realAppend = atomic.appendFileSynced.bind(atomic);
+    const realSyncDirectory = atomic.syncDirectory.bind(atomic);
+    let filesSyncedBytes: Buffer | null = null;
+    let injected = false;
+    const appendSpy = jest.spyOn(atomic, "appendFileSynced").mockImplementation(async (file: unknown, data: unknown, io: unknown) => {
+        const result = await realAppend(file, data, io);
+        if (String(data).includes('"filesSynced":true')) filesSyncedBytes = readFileSync(String(file));
+        return result;
+    });
+    const dirSpy = jest.spyOn(atomic, "syncDirectory").mockImplementation(async (directory: unknown, io: unknown) => {
+        const journal = join(dest, DEPENDENCY_JOURNAL_NAME);
+        if (!injected && filesSyncedBytes && !existsSync(journal)) {
+            injected = true;
+            writeFileSync(journal, filesSyncedBytes);
+            expect(readDependencyJournal(readFileSync(journal)).filesSynced).toBe(true);
+            throw new Error("crash before directory fsync returns");
+        }
+        return realSyncDirectory(directory, io);
+    });
+    try {
+        await expect(copy()).rejects.toThrow(/directory fsync returns/);
+        expect(injected).toBe(true);
+        expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+        expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+        expect(readFileSync(join(dest, "models", "shape.bin"), "utf8")).toBe("owned mesh");
+        expect(existsSync(journalPathSafe())).toBe(false);
+    } finally {
+        appendSpy.mockRestore();
+        dirSpy.mockRestore();
+    }
+});
+
+function journalPathSafe(): string {
+    return join(dest, DEPENDENCY_JOURNAL_NAME);
+}
+
+test("a crash before the filesSynced file flush still shows the in-progress record", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    const atomic = require("./atomicWrite");
+    const realAppend = atomic.appendFileSynced.bind(atomic);
+    const spy = jest.spyOn(atomic, "appendFileSynced").mockImplementation(async (file: unknown, data: unknown, io: unknown) => {
+        if (String(data).includes('"filesSynced":true')) {
+            const torn = Buffer.from(data as Buffer).subarray(0, 16);
+            const handle = await promises.open(String(file), "r+");
+            try {
+                const size = (await handle.stat()).size;
+                await handle.write(torn, 0, torn.length, size);
+            } finally {
+                await handle.close();
+            }
+            throw new Error("crash before file sync returns");
+        }
+        return realAppend(file, data, io);
+    });
+    try {
+        await expect(copy()).rejects.toThrow(/file sync returns/);
+        expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+        expect(existsSync(join(dest, "color.png"))).toBe(false);
+        expect(existsSync(join(dest, "models"))).toBe(false);
         expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
     } finally { spy.mockRestore(); }
 });

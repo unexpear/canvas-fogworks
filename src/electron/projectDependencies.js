@@ -2,14 +2,19 @@
  * @module projectDependencies
  * @description Relocates bounded linked-level graphs, relative images and 3D sidecars without copying unreferenced packs or overwriting conflicting files.
  * An incomplete copy deletes only the destination files and directories that copy created. A killed copy leaves a journal the next cross-folder Save As rolls back.
- * Created file bytes are flushed, then the journal is replaced with a filesSynced record, before that name is removed. A journal that still says filesSynced keeps those copies and removes only itself. filesSynced means the file sync calls returned; it is not a directory-fsync or power-loss proof. An unclean journal write's temporary file is removed on the next rollback.
+ * The journal is a checksummed append-only log. After payload file syncs return, a filesSynced record is appended and that file sync returns before the journal name is removed, so discarding later unsynced directory operations still shows filesSynced. A crash before that file sync returns can still show the previous record. filesSynced means those file sync calls returned; it is not a directory-fsync, ignored-flush, or power-loss proof. A journal that still says filesSynced keeps those copies and removes only itself. An unclean journal write's temporary file is removed on the next rollback.
  */
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { resolveConfined } = require("./confine");
 const atomic = require("./atomicWrite");
 
 const DEPENDENCY_JOURNAL_NAME = ".fogworks-dependency-journal.json";
+const JOURNAL_MAGIC = Buffer.from("FWJ1\n");
+const JOURNAL_CHECKSUM_BYTES = 8;
+const JOURNAL_HEADER_BYTES = 4 + JOURNAL_CHECKSUM_BYTES;
+const JOURNAL_RECORD_LIMIT = 8 * 1024 * 1024;
 
 function journalPath(destinationRoot) {
     return path.join(destinationRoot, DEPENDENCY_JOURNAL_NAME);
@@ -26,6 +31,69 @@ function assertJournalRelative(relative) {
     }
 }
 
+function assertJournalShape(journal) {
+    if (!journal || journal.version !== 1 || !Array.isArray(journal.directories) || !Array.isArray(journal.files)
+        || (journal.filesSynced !== undefined && journal.filesSynced !== true)) {
+        throw new Error("Invalid dependency rollback journal.");
+    }
+}
+
+function journalChecksum(body) {
+    return crypto.createHash("sha256").update(body).digest().subarray(0, JOURNAL_CHECKSUM_BYTES);
+}
+
+function encodeJournalRecord(journal) {
+    const body = Buffer.from(JSON.stringify(journal), "utf8");
+    if (body.length === 0 || body.length > JOURNAL_RECORD_LIMIT) throw new Error("Invalid dependency rollback journal.");
+    const header = Buffer.alloc(JOURNAL_HEADER_BYTES);
+    header.writeUInt32BE(body.length, 0);
+    journalChecksum(body).copy(header, 4);
+    return Buffer.concat([header, body]);
+}
+
+function encodeJournalLog(journal) {
+    return Buffer.concat([JOURNAL_MAGIC, encodeJournalRecord(journal)]);
+}
+
+/**
+ * The last valid record in an append-only journal. A torn tail is ignored. A legacy single
+ * JSON object is still accepted. Invalid JSON and an empty log are refused.
+ */
+function readDependencyJournal(raw) {
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw));
+    if (buf.length === 0) throw new Error("Invalid dependency rollback journal.");
+    if (buf[0] === 0x7b) {
+        let journal;
+        try { journal = JSON.parse(buf.toString("utf8")); }
+        catch { throw new Error("Invalid dependency rollback journal."); }
+        assertJournalShape(journal);
+        return journal;
+    }
+    if (buf.length < JOURNAL_MAGIC.length || !buf.subarray(0, JOURNAL_MAGIC.length).equals(JOURNAL_MAGIC)) {
+        throw new Error("Invalid dependency rollback journal.");
+    }
+    let offset = JOURNAL_MAGIC.length;
+    let last = null;
+    while (offset + JOURNAL_HEADER_BYTES <= buf.length) {
+        const length = buf.readUInt32BE(offset);
+        if (!Number.isInteger(length) || length <= 0 || length > JOURNAL_RECORD_LIMIT) break;
+        const start = offset + JOURNAL_HEADER_BYTES;
+        const end = start + length;
+        if (end > buf.length) break;
+        const body = buf.subarray(start, end);
+        if (!journalChecksum(body).equals(buf.subarray(offset + 4, offset + JOURNAL_HEADER_BYTES))) break;
+        let journal;
+        try { journal = JSON.parse(body.toString("utf8")); }
+        catch { break; }
+        try { assertJournalShape(journal); }
+        catch { break; }
+        last = journal;
+        offset = end;
+    }
+    if (!last) throw new Error("Invalid dependency rollback journal.");
+    return last;
+}
+
 /**
  * Remove a crashed copy's created files and directories, then the journal.
  * A filesSynced journal keeps those copies and removes only itself. Missing pieces are already gone.
@@ -35,13 +103,9 @@ async function rollbackDependencyJournal(destinationRoot) {
     const journalFile = journalPath(destinationRoot);
     await atomic.reapStaleAtomicTemps(journalFile);
     let raw;
-    try { raw = await fs.promises.readFile(journalFile, "utf8"); }
+    try { raw = await fs.promises.readFile(journalFile); }
     catch (error) { if (error.code === "ENOENT") return false; throw error; }
-    const journal = JSON.parse(raw);
-    if (!journal || journal.version !== 1 || !Array.isArray(journal.directories) || !Array.isArray(journal.files)
-        || (journal.filesSynced !== undefined && journal.filesSynced !== true)) {
-        throw new Error("Invalid dependency rollback journal.");
-    }
+    const journal = readDependencyJournal(raw);
     for (const relative of journal.files) assertJournalRelative(relative);
     for (const relative of journal.directories) assertJournalRelative(relative);
     // The flag is written only after payload file sync() returned. Deleting those copies would
@@ -233,7 +297,19 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
     }
     if (directories.length === 0 && planned.length === 0) return;
     const journal = { version: 1, directories: [...directories], files: planned.map(item => item.relative) };
-    const persistJournal = () => atomic.atomicWrite(journalPath(destinationRoot), JSON.stringify(journal));
+    let journalPublished = false;
+    const persistJournal = async () => {
+        const file = journalPath(destinationRoot);
+        if (!journalPublished) {
+            // The first record publishes the journal name. Later records append into that file
+            // and flush those bytes, so a crash before a later directory flush cannot restore
+            // an older record once this append's file sync has returned.
+            await atomic.atomicWrite(file, encodeJournalLog(journal));
+            journalPublished = true;
+            return;
+        }
+        await atomic.appendFileSynced(file, encodeJournalRecord(journal));
+    };
     try {
         await persistJournal();
         for (const relative of [...directories]) {
@@ -270,9 +346,10 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
             }
         }
         await flushCreatedDependencies(destinationRoot, journal);
-        // Replace the in-progress journal only after those file syncs returned. Rollback of a
-        // record that still says filesSynced must not delete the copies. The replacement is
-        // file-flushed by atomicWrite before rename; its directory flush is not a power-loss proof.
+        // Append filesSynced only after those file syncs returned. Rollback of a record that
+        // still says filesSynced must not delete the copies. The append is file-flushed before
+        // the name is removed. A crash before that file sync returns can still show the previous
+        // record. A later directory flush is not what publishes these bytes.
         journal.filesSynced = true;
         await persistJournal();
         await fs.promises.unlink(journalPath(destinationRoot));
@@ -285,4 +362,9 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
         throw error;
     }
 }
-module.exports = { copyProjectDependencies, rollbackDependencyJournal, DEPENDENCY_JOURNAL_NAME };
+module.exports = {
+    copyProjectDependencies,
+    rollbackDependencyJournal,
+    readDependencyJournal,
+    DEPENDENCY_JOURNAL_NAME
+};
