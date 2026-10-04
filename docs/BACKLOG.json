@@ -24,8 +24,8 @@
       "area": "app-shell",
       "priority": "P1",
       "status": "open",
-      "summary": "Continue extracting cohesive panels and workflows from App.tsx. The layers panel, document toolbar (theme, state, timeline, light, background, screen), project files, image-sequence import, workspace/runtime controls, the 3D inspector, the folders drawer, the script and token panels, and the timeline transport are tested seams. Inspector remnants (states, slots, variants, metadata) and import placement callbacks remain in App.tsx.",
-      "evidence": ["src/app/App.tsx", "src/app/LayersPanel.tsx", "src/app/DocumentControls.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx", "src/app/FoldersDrawer.tsx", "src/app/ScriptPanel.tsx", "src/app/TokensPanel.tsx", "src/app/TimelineTransport.tsx"]
+      "summary": "Continue extracting cohesive panels and workflows from App.tsx. The layers panel, document toolbar (theme, state, timeline, light, background, screen), project files, image-sequence import, workspace/runtime controls, the 3D inspector, the folders drawer, the script and token panels, the timeline transport, the node inspector sections for states, slots, variants and metadata, and the import-placement callbacks (folder images, numbered sequences, Aseprite, SVG paths and tile maps) are tested seams. App.tsx still owns the rest of the inspector, the canvas and tools, the runtime play loop, selected-node track import, and 3D model and HDR environment import.",
+      "evidence": ["src/app/App.tsx", "src/app/LayersPanel.tsx", "src/app/DocumentControls.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx", "src/app/FoldersDrawer.tsx", "src/app/ScriptPanel.tsx", "src/app/TokensPanel.tsx", "src/app/TimelineTransport.tsx", "src/app/NodeInspectorSections.tsx", "src/app/ImportPlacement.ts"]
     },
     {
       "id": "GAMEPLAY-001",
