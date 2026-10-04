@@ -19,6 +19,7 @@ import { clipsError } from "./Clips";
 import { behaviorAssetsError } from "./BehaviorAssets";
 import { gameplayVariablesError } from "./GameplayData";
 import { behaviorFunctionsError } from "./BehaviorFunctions";
+import { saveMigrationsError } from "./SaveMigrations";
 import { behaviorDataBindingsError } from "./BehaviorDataBindings";
 import { tilesetsError } from "./Tileset";
 import { ikError } from "./Rig";
@@ -242,6 +243,8 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     if(gameplayDataError)throw new Error(gameplayDataError);
     const functionsError=behaviorFunctionsError(doc.behaviorFunctions,doc.gameplayVariables);
     if(functionsError)throw new Error(functionsError);
+    const migrationError = saveMigrationsError(doc.saveMigrations);
+    if (migrationError) throw new Error(`Invalid document: ${migrationError}`);
     for(const graph of [...(doc.behaviorAssets??[]).map(a=>a.graph),...[...doc.nodes.values()].map(n=>n.entity?.behavior)]){
         const error=behaviorDataBindingsError(graph,doc.gameplayVariables,[],doc.behaviorFunctions);if(error)throw new Error(error);
     }

@@ -10,7 +10,7 @@ export interface GameLevel { content: string; links: Record<string, string>; }
 export interface GamePackage {
     entry: string;
     levels: Record<string, GameLevel>;
-    /** Previous package-content hashes this build may adopt. Absent means none. Preserved when present; the editor does not author it. */
+    /** Previous package-content hashes this build may adopt. Absent means none. Export copies the entry document's list. */
     saveMigrations?: { fromGameId: string; versions: readonly number[] }[];
 }
 export function gameDocumentTargets(content: string): string[] {

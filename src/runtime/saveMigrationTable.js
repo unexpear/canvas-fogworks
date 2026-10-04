@@ -1,6 +1,6 @@
 /**
  * @module saveMigrationTable
- * @description Validates the explicit previous-build list shared by packaged games and progress slots.
+ * @description Validates the explicit previous-build list shared by documents, packaged games and progress slots.
  */
 const SAVE_MIGRATION_LIMIT = 8;
 const HASH = /^[a-f0-9]{64}$/;
@@ -30,4 +30,14 @@ function validateSaveMigrationTable(migrations, toGameId) {
     return result;
 }
 
-module.exports = { SAVE_MIGRATION_LIMIT, validateSaveMigrationTable };
+function saveMigrationsFromDocument(content) {
+    if (typeof content !== "string") throw new Error("Invalid document.");
+    let raw;
+    try { raw = JSON.parse(content); } catch { throw new Error("Invalid document."); }
+    const document = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.document : undefined;
+    if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("Invalid document.");
+    if (!Object.prototype.hasOwnProperty.call(document, "saveMigrations")) return [];
+    return validateSaveMigrationTable(document.saveMigrations);
+}
+
+module.exports = { SAVE_MIGRATION_LIMIT, validateSaveMigrationTable, saveMigrationsFromDocument };

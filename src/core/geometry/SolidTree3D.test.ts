@@ -4,6 +4,7 @@ import {gameplayFixture} from "../tests/fixtures/GameplayFixture";
 import {ActionDispatcher} from "../actions/ActionDispatcher";
 import {SetSpatial3DAction} from "../actions/SetSpatial3DAction";
 import {serializeDocument,deserializeDocument} from "../document/Serializer";
+import {SCHEMA_VERSION} from "../document/Document";
 import {world3DFrom,stepWorld3D} from "../runtime/World3D";
 import {buildFrame3D} from "../../renderer/Scene3D";
 import {copySpatial3D} from "../../renderer/Gizmo3D";
@@ -13,7 +14,7 @@ test("solid tree Actions preserve editable operands, undo/redo, schema migration
     const doc=gameplayFixture(),original=doc.nodes.get("lever")!.spatial3d!,dispatcher=new ActionDispatcher(doc);
     const spatial={...original,solidTree:doorway(),blockoutCollision:true};
     expect(dispatcher.dispatchAction(new SetSpatial3DAction(doc,"lever",spatial)).success).toBe(true);
-    const saved=serializeDocument(dispatcher.getDocument());expect(JSON.parse(saved).version).toBe("89");expect(saved).not.toContain('"vertices"');
+    const saved=serializeDocument(dispatcher.getDocument());expect(JSON.parse(saved).version).toBe(SCHEMA_VERSION);expect(saved).not.toContain('"vertices"');
     const reopened=deserializeDocument(saved);expect(reopened.nodes.get("lever")!.spatial3d!.solidTree).toEqual(spatial.solidTree);
     const copied=copySpatial3D(reopened.nodes.get("lever")!.spatial3d!);copied.solidTree!.id="changed";
     expect(reopened.nodes.get("lever")!.spatial3d!.solidTree!.id).toBe("cut");

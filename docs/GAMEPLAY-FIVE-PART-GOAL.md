@@ -1,6 +1,7 @@
 # Gameplay foundations and 3D level authoring — delivery goal
 
 <!-- describes: src/core/document, src/core/runtime, src/core/actions, src/runtime, src/player, src/player3d, src/app/BehaviorGraphPanel.tsx, scripts/smoke-player.js -->
+<!-- re-read 2026-10-04: the inspector authors the migration list and loading still does not write the new slot. Prefabs remain open. -->
 <!-- re-read 2026-10-02: explicit save-build maps and progress-writer kill/relaunch checks are in.
      They do not complete parts 3–5. Prefab instances remain open. The kill test is not a
      power-loss proof or a GUI renderer crash. Document schema stays 89.
@@ -186,8 +187,8 @@ Status: visited-level snapshots and game-scoped values are implemented as player
 An explicit migration list can adopt those saves onto a later content hash. `npm run test:progress-crash`
 kills the progress writer at partial-write, flush, pre-rename, post-rename and directory-fsync, then
 reads the last committed slot in a fresh process. That is not a power-loss proof or an Electron
-renderer crash. Prefab instances inside those snapshots remain open. There is no editor control
-for the migration list, and loading a predecessor does not write the new slot by itself.
+renderer crash. Prefab instances inside those snapshots remain open. The inspector authors the
+migration list, and loading a predecessor does not write the new slot by itself.
 
 Introduce a versioned campaign snapshot containing visited-level state and shared gameplay values.
 Stage reads, validation and asset loading before replacing live state. Returning to a visited level

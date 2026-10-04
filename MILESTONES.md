@@ -3,7 +3,7 @@
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
 > Status reconciled **2026-09-05** against the shared animation-controller implementation and the 2026-08-21
-> mutation-battery close-out; engine **v0.0.5**, schema **89**.
+> mutation-battery close-out; engine **v0.0.5**, schema **90**.
 
 **2026-09-16 behavior graphs:** visual event/branch/action authoring and bounded shared 2D/3D
 execution are delivered as the first ENG-04/Q06 graph slice. See [Behavior graphs](docs/BEHAVIOR-GRAPHS.md).
@@ -23,6 +23,7 @@ for limits and verification; this does not complete the broader engine milestone
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
+<!-- re-read 2026-10-04: schema 90 stores the optional save-migration list. Milestone status and historical slice counts are unchanged. -->
 <!-- re-read 2026-10-02: the 2D game package can carry an optional saveMigrations list. Milestone
      status and historical slice counts are unchanged. -->
 <!-- re-read 2026-09-28: named-input Controls live under src/core and do not change milestone
