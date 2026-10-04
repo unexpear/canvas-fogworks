@@ -1,6 +1,8 @@
 # Gameplay foundations and 3D level authoring — delivery goal
 
 <!-- describes: src/core/document, src/core/runtime, src/core/actions, src/runtime, src/player, src/player3d, src/app/BehaviorGraphPanel.tsx, scripts/smoke-player.js -->
+<!-- re-read 2026-10-04: world-partition cell streaming lives beside the package reader. It does not
+     change gameplay command semantics, prefabs or the five-part goal. Document schema stays 89. -->
 <!-- re-read 2026-10-02: explicit save-build maps and progress-writer kill/relaunch checks are in.
      They do not complete parts 3–5. Prefab instances remain open. The kill test is not a
      power-loss proof or a GUI renderer crash. Document schema stays 89.

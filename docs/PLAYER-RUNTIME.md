@@ -1,6 +1,7 @@
 # Shared player runtime — loading and session lifecycle
 
 <!-- describes: src/runtime, src/app/Asset3DImportWorkflow.ts, src/app/LevelTransitionWorkflow.ts, scripts/smoke-level-transition.js -->
+<!-- re-read 2026-10-04: an optional world-partition table is validated with the package. Cell residency is a separate caller-driven session. Loading and PlayerSession3D staging are otherwise unchanged. -->
 <!-- re-read 2026-10-02: PlayerSession3D accepts an explicit save-migration list. Loading and session staging are otherwise unchanged. -->
 
 Implemented 2026-09-12 as Q02 loading and player-session slices in the [engine roadmap](ENGINE-ROADMAP.md).
@@ -161,5 +162,7 @@ or native backend were introduced. The packaged player now plays embedded sound 
 screen-space 2D text over the 3D view. Clean-profile acceptance is `smoke:player-acceptance`.
 Buffer, image and HDR bytes can stream from a host-supplied chunk when a level reads them; models
 and fonts stay inline. `check:player-exe-evidence` is the clean-machine EXE scoring path. No
-clean-machine result is recorded, signatures are omitted, and world-partition streaming and the
-complete F1 gate remain open.
+clean-machine result is recorded. `check:package-signature` fail-closes without a certificate or
+publisher, and the exporter still stamps those fields null. A world-partition cell session can
+stream declared payloads around a caller focus; the packaged player does not supply that focus.
+The complete F1 gate remains open.

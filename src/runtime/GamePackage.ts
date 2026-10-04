@@ -2,6 +2,7 @@
  * @module GamePackage
  * @description Bounded game manifest and read-only allowlisted player host.
  * Inline payloads stay in the manifest. Buffer, image and HDR payloads can be read from a stream source when a level uses them.
+ * An optional world-partition table names streamed cells. It does not raise the payload budget.
  * The host supplies those bytes; this module performs no filesystem or network access.
  */
 
@@ -12,8 +13,12 @@ import type { PlayerProjectReader } from "./ProjectReadHost";
 import { fontFaceError, fontStackFamilies, inspectDocumentProfile, inspectModelProfile, isGenericFontFamily, normalizeFontFamily } from "./PackageProfile";
 import type { PackageDiagnostic } from "./PackageProfile";
 import type { SaveBuildMigration } from "./SaveMigration";
+import type { WorldPartitionTable } from "./WorldPartition";
 const { validateSaveMigrationTable } = require("./saveMigrationTable") as {
     validateSaveMigrationTable: (migrations: unknown, toGameId?: string) => SaveBuildMigration[];
+};
+const { validateWorldPartition } = require("./worldPartitionTable") as {
+    validateWorldPartition: (value: unknown, files: ReadonlyMap<string, { kind: string; bytes: number; streamed: boolean; sha256: string | null }>) => WorldPartitionTable;
 };
 
 export const GAME_PACKAGE_LIMITS = Object.freeze({ jsonBytes: 64 * 1024 * 1024,
@@ -43,12 +48,15 @@ export interface GamePackageManifest {
     fonts?: PackageFont[];
     /** Previous content hashes whose saves this package may adopt. Absent means none. */
     saveMigrations?: SaveBuildMigration[];
+    /** Optional streamed cells. Absent means this package is not world-partition streamed. */
+    worldPartition?: unknown;
 }
 export interface PackagedGameReader extends PlayerProjectReader {
     readonly entryKey: string;
     readonly fonts: readonly PackagedFontFace[];
     readonly warnings: readonly PackageDiagnostic[];
     readonly saveMigrations: readonly SaveBuildMigration[];
+    readonly worldPartition: WorldPartitionTable | null;
 }
 interface HeldFile { id: string; kind: PackageFileKind; bytes: number; data: string | null; sha256: string | null }
 interface ValidLevel { content: string; links: Map<string, string>; resources: Map<string, HeldFile>; models: Set<string> }
@@ -158,7 +166,7 @@ function envelope(value: unknown): Record<string, unknown> {
     const result = value as Record<string, unknown>;
     const keys = Object.keys(result);
     const required = ["format", "version", "entry", "requiredCapabilities", "levels", "files"];
-    const optional = ["fonts", "saveMigrations"];
+    const optional = ["fonts", "saveMigrations", "worldPartition"];
     if (keys.some(key => !required.includes(key) && !optional.includes(key)) || required.some(key => !Object.prototype.hasOwnProperty.call(result, key))) {
         throw new Error("Invalid or unsupported package fields.");
     }
@@ -330,6 +338,12 @@ export function createPackageReader(serialized: string, streams?: PackageStreamS
         reached.add(key); pending.push(...levels.get(key)!.links.values());
     }
     if (reached.size !== levels.size) throw new Error("Unreachable package level.");
+    const partitionTable = Object.prototype.hasOwnProperty.call(raw, "worldPartition")
+        ? validateWorldPartition(raw.worldPartition, new Map([...files.values()].map(file => [file.id, {
+            kind: file.kind, bytes: file.bytes, streamed: file.sha256 !== null, sha256: file.sha256
+        }])))
+        : null;
+    if (partitionTable) for (const cell of partitionTable.cells) usedFiles.add(cell.file);
     if (usedFiles.size !== files.size) throw new Error("Unused package file.");
     const level = (key: string): ValidLevel => {
         const found = levels.get(key); if (!found) throw new Error("Unknown package level key."); return found;
@@ -357,6 +371,7 @@ export function createPackageReader(serialized: string, streams?: PackageStreamS
         fonts: fontList,
         warnings: warningList,
         saveMigrations: migrationList,
+        worldPartition: partitionTable,
         async readProgressLevel(key: string) { return { filePath: key, content: level(key).content }; },
         async readEntryFile(key: string) {
             if (key !== entry) throw new Error("Unknown package entry key.");

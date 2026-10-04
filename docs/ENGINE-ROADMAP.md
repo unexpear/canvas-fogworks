@@ -1,6 +1,10 @@
 # Canvas Fogworks — full engine development plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/export, src/core/script, src/runtime, src/renderer, src/app/RuntimeAudio.ts, package.json -->
+<!-- re-read 2026-10-04: package signature verification fail-closes without a certificate, publisher
+     and matching trust anchor. World-partition cells can stream declared buffer/image/HDR payloads
+     around a caller focus. The packaged player does not drive that focus. No clean-machine EXE,
+     release certificate or publisher is recorded. F1 stays open. -->
 <!-- re-read 2026-10-02: player progress can adopt an explicitly listed previous content hash.
      package.json records test:progress-crash. Prefabs and the editor migration control remain open.
      spatial3d-v1 can stream buffer/image/HDR chunks and scores a clean-machine EXE record with
@@ -30,8 +34,12 @@ package export, an embedded-payload checksum, a real event/render host and an un
 unpacked build; see [Standalone player](STANDALONE-PLAYER.md). Clean-profile acceptance, custom font
 packaging, unsupported-feature diagnostics and unsigned provenance are now part of that player.
 Buffer, image and HDR payload streaming, packaged level-transition coverage and
-`check:player-exe-evidence` are in place. A recorded clean-machine EXE pass, signatures and
-world-partition streaming remain open. See PLAYER-RUNTIME.md for scoped verification evidence.
+`check:player-exe-evidence` are in place. `check:package-signature` fail-closes without a
+certificate, publisher, signature and matching trust anchor. A caller-supplied world-partition
+table can load and release streamed cells around a focus; packages without that table are not
+world-partition streamed, and the player does not page them from the camera. A recorded
+clean-machine EXE pass, a real release signature and publisher, and the F1 gate remain open.
+See PLAYER-RUNTIME.md for scoped verification evidence.
 
 Q06 follow-up 2026-09-12: schema 79 adds reusable named input actions, nearest-target interaction,
 bounded leaf-template spawning/despawning, checkpoints/respawn and versioned current-level progress
@@ -192,8 +200,10 @@ explicitly called the full gate. Every slice also obeys section 7's common defin
 **State:** partial; 2D/3D HTML export, editor packaging, an unsigned Windows standalone 3D unpacked
 build, custom font embedding, profile diagnostics, unsigned provenance, a clean-profile
 acceptance smoke, on-demand buffer/image/HDR chunks and `check:player-exe-evidence` exist. The
-checker does not record a clean-machine pass. Signatures and world-partition streaming remain open;
-see [Standalone player](STANDALONE-PLAYER.md).
+checker does not record a clean-machine pass. `check:package-signature` rejects a missing
+certificate or publisher. A world-partition cell session can load streamed payloads around a
+caller focus and keeps its anchor when a neighbor fails; camera paging, a real signature and a
+real publisher remain open. See [Standalone player](STANDALONE-PLAYER.md).
 **Phases:** F1, then F4/F6. **Role:** runtime/release engineering.
 
 - **First slice:** extract a minimal runtime host; build a Windows game player without editor
@@ -393,7 +403,10 @@ geometry virtualization belongs to separate F7 research after ordinary LOD/strea
 
 ### ENG-11 — World streaming, terrain and environment authoring
 
-**State:** linked-level loading exists; large-world production systems are new.
+**State:** linked-level loading exists. A bounded cell table can stream declared payloads around a
+focus, with cancellation, an anchor and a 32 MiB residency cap. Packages without that table are
+not world-partition streamed, and the player does not drive the focus. Terrain and large-world
+production systems remain new.
 **Phases:** F4 foundations; F5 delivery; advanced F7. **Role:** world/tools engineering.
 
 - **First slice:** spatial partition and cell/subscene contract with stable references,

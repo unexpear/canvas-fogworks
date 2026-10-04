@@ -49,6 +49,9 @@ samples under `scripts/benchmark-host-samples/` do not move it. Software GL stay
 not a hardware budget. Workloads, limits and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- re-read 2026-10-04: 3D export now refuses a publisher or signature and can attach a streamed
+     world-partition table. check:package-signature and check:world-partition are not ci gates;
+     exit 2 is not a pass. Recovery, progress-crash and benchmark checks are unchanged. -->
 <!-- re-read 2026-10-02: dependency copies now write a filesSynced journal after payload file
      flushes, and test:recovery kills at those checkpoints. A filesSynced journal keeps the copies.
      That flag is not a power-loss proof. test:progress-crash covers the gameplay progress slot.

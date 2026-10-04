@@ -1,6 +1,9 @@
 # Standalone 3D export and Windows player
 
-<!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/playerExeEvidence.js, scripts/check-player-exe-evidence.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/playerExeEvidence.js, scripts/check-player-exe-evidence.js, scripts/packageSignature.js, scripts/check-package-signature.js, scripts/check-world-partition.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-10-04: provenance stamps null publisher, signature and certificate. check:package-signature
+     fail-closes when any of those are missing. --world-partition attaches a caller-supplied cell table
+     after --stream. The packaged player does not page those cells from the camera. F1 stays open. -->
 <!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes.
      --stream writes buffer/image/HDR chunks beside the player. Models, fonts, embedded cues and
      screen-space text stay on their existing paths. check:player-exe-evidence scores a clean-machine
@@ -44,6 +47,7 @@ From the repository, using a **new**, nonexistent output directory whose parent 
 ```powershell
 npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --desktop --fonts "D:\game-builds\fonts"
 npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --desktop --stream --fonts "D:\game-builds\fonts"
+npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --stream --world-partition "D:\game-builds\cells.json"
 ```
 
 `--stream` moves `buffer`, `image` and `hdr` payloads into `app/streams/<id>.bin` and records their
@@ -52,6 +56,11 @@ inline. The desktop host reads a chunk only when the active level asks for it an
 before the renderer sees the bytes. A browser that opens that HTML directly has no stream bridge, so
 use the default command when the artifact must play from the HTML alone. `--stream` does not raise
 the 32 MiB payload budget and does not sign the executable.
+
+`--world-partition` reads a JSON cell table and stamps it after streaming. The file must name an
+anchor and cells whose `file` ids are streamed `buffer`, `image` or `hdr` payloads. Without
+`--stream` the command refuses the table. Omitting the flag leaves the package without a partition.
+The command does not invent cells, a certificate or a publisher.
 
 `--fonts` is a directory of `.ttf`/`.otf` files, not a recursive asset scan. Only faces whose family
 is used by a packaged level are embedded. The editor export uses faces registered in that session
@@ -74,7 +83,8 @@ portable executable or installer. No Node installation is needed on the player's
 The build uses the repository's installed Electron version and never publishes artifacts.
 Build failures can leave a partial new output directory; choose another new directory on retry.
 
-Distribution remains unsigned and does not identify a personal publisher. Missing-author/default
+Distribution remains unsigned and does not identify a personal publisher. `game.provenance.json`
+records `publisher`, `signature` and `certificate` as null. Missing-author/default
 icon warnings are expected. Windows reputation warnings can still occur. No certificate, signing
 service or publisher identity was added. Only original repository fixtures were used in verification.
 
@@ -170,9 +180,17 @@ provenance, a level transition and a streamed payload, and it must keep `signing
 exits 2. That exit is the open manual gate, not a pass. This repository does not contain such a
 result, and the checker does not launch the EXE or apply a certificate.
 
+`npm run check:package-signature` verifies a detached statement when a certificate, a publisher
+string, a signature and a byte-identical trust-anchor certificate are all supplied. With any of
+those missing it exits 2. That exit is not a pass. The certificate subject is not used as a
+publisher. `npm run check:world-partition` exits 2 when no cell table is supplied, and that exit
+is not a pass. A declared table can be streamed by `createWorldPartitionSession` around a caller
+focus: in-range cells load, a cancelled read is dropped, the anchor stays when a neighbor fails,
+and residency cannot exceed 32 MiB. The packaged player does not pass the camera into that session.
+
 Still open: a recorded clean Windows-machine pass of the unpacked EXE; prefab campaign snapshots,
 portable save files, multiple slots and an editor control for save migrations; long-session/GPU/device-loss evidence;
-world-partition streaming, signatures, trusted updates and broader platform support. F1 remains partial.
+a real release certificate and publisher, camera-driven world-partition paging, trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.
 

@@ -1,6 +1,9 @@
 # 3D Foundation — adoption plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
+<!-- re-read 2026-10-04: world-partition cells stream declared payloads around a caller focus.
+     Meshes, lighting, collision and import behavior are unchanged. No clean-machine EXE pass
+     or release signature is recorded. -->
 <!-- re-read 2026-10-02: progress adoption does not change meshes, lighting, collision or import.
      The packaged 3D player plays embedded sound cues, draws screen-space text and can stream
      buffer/image/HDR chunks. Meshes, lighting, collision and import behavior are unchanged.

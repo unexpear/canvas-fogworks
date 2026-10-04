@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSy
 import { tmpdir } from "os";
 import { resolve, join } from "path";
 import { createHash } from "crypto";
-import { collectGamePackage, externalizePackageStreams, fontPayloadsFromJson, game3DHtml, gameProvenance } from "./GamePackageExport";
+import { attachWorldPartition, collectGamePackage, externalizePackageStreams, fontPayloadsFromJson, game3DHtml, gameProvenance } from "./GamePackageExport";
 const { ownedTestFont } = require("../../scripts/owned-test-font");
 import { createPackageReader, GAME_PACKAGE_LIMITS } from "../runtime/GamePackage";
 import { PlayerSession3D } from "../runtime/PlayerSession3D";
@@ -133,6 +133,9 @@ test("custom fonts are packaged from a directory or payload and provenance omits
     expect(reader.warnings.map(warning => warning.code)).toEqual([]);
     const provenance = gameProvenance(serialized, { appVersion: "0.0.5", sourceRevision: null });
     expect(provenance.authenticity).toBe("unsigned");
+    expect(provenance.publisher).toBeNull();
+    expect(provenance.signature).toBeNull();
+    expect(provenance.certificate).toBeNull();
     expect(provenance.manifestSha256).toBe(createHash("sha256").update(serialized).digest("hex"));
     expect(provenance.fonts[0].sha256).toHaveLength(64);
     expect(JSON.stringify(provenance)).not.toContain(temp);
@@ -208,6 +211,9 @@ test("package:game --stream writes chunk files beside the player without signing
     expect(html).not.toContain(chunk.toString("base64"));
     const provenance = JSON.parse(readFileSync(join(destination, "game.provenance.json"), "utf8"));
     expect(provenance.authenticity).toBe("unsigned");
+    expect(provenance.publisher).toBeNull();
+    expect(provenance.signature).toBeNull();
+    expect(provenance.certificate).toBeNull();
     expect(provenance.files.find((file: { id: string }) => file.id === buffer.id).placement).toBe("stream");
     const present = ["app/game.html", "app/main.cjs", "app/package.json", "app/progressPreload.js", "game.cfgame.json", "game.provenance.json",
         ...manifest.files.filter((file: { sha256?: string }) => file.sha256).map((file: { id: string }) => `app/streams/${file.id}.bin`)];
@@ -221,6 +227,44 @@ test("package:game --stream writes chunk files beside the player without signing
     };
     walk(destination);
     expect(found.sort()).toEqual(present.sort());
+}, 60000);
+test("a publisher or signature cannot be stamped, and cells attach only to streamed payloads", async () => {
+    const serialized = await collect();
+    const provenance = gameProvenance(serialized, { appVersion: "0.0.5", sourceRevision: null });
+    const forged = { ...provenance, publisher: "Pat Example", authenticity: "signed" as const };
+    expect(() => game3DHtml(serialized, Buffer.from("/* owned player */"), forged as unknown as typeof provenance)).toThrow(/no publisher or signature/);
+    const split = externalizePackageStreams(serialized);
+    const buffer = JSON.parse(split.serialized).files.find((file: { kind: string }) => file.kind === "buffer");
+    const partition = { anchor: "home", loadRadius: 4, unloadRadius: 8, cells: [{ id: "home", min: [-1, -1, -1], max: [1, 1, 1], file: buffer.id }] };
+    expect(() => attachWorldPartition(serialized, partition)).toThrow(/streamed buffer, image or hdr/);
+    const attached = attachWorldPartition(split.serialized, partition);
+    expect(JSON.parse(attached).worldPartition.cells[0].file).toBe(buffer.id);
+    expect(createPackageReader(attached, { async read() { throw new Error("not loaded"); } }).worldPartition?.anchor).toBe("home");
+    expect(() => attachWorldPartition(attached, partition)).toThrow(/already declared/);
+    const { packageGame } = require("../../scripts/package-game");
+    await expect(packageGame(project, join(temp, "partition-without-stream"), { worldPartition: partition })).rejects.toThrow(/require --stream/);
+    expect(require("fs").existsSync(join(temp, "partition-without-stream"))).toBe(false);
+});
+test("package:game writes a supplied world partition without a publisher or signature", async () => {
+    const { packageGame } = require("../../scripts/package-game");
+    const destination = join(temp, "partitioned-game");
+    await packageGame(project, destination, { stream: true, worldPartition: {
+        anchor: "home", loadRadius: 4, unloadRadius: 8,
+        cells: [{ id: "home", min: [-1, -1, -1], max: [1, 1, 1], file: "file1" }]
+    } });
+    const manifest = JSON.parse(readFileSync(join(destination, "game.cfgame.json"), "utf8"));
+    const buffer = manifest.files.find((file: { id: string }) => file.id === "file1");
+    expect(buffer.kind).toBe("buffer");
+    expect(buffer.data).toBeUndefined();
+    expect(buffer.sha256).toHaveLength(64);
+    expect(manifest.worldPartition.anchor).toBe("home");
+    expect(manifest.worldPartition.cells[0].file).toBe("file1");
+    const provenance = JSON.parse(readFileSync(join(destination, "game.provenance.json"), "utf8"));
+    expect(provenance.authenticity).toBe("unsigned");
+    expect(provenance.publisher).toBeNull();
+    expect(provenance.signature).toBeNull();
+    expect(provenance.certificate).toBeNull();
+    expect(JSON.stringify(provenance)).not.toContain(temp);
 }, 60000);
 test("HTML keeps untrusted document text out of markup and binds the UTF8 payload digest", async () => {
     raw.document.nodes.triangle.userData = { note: { type: "string", value: "</script><script>alert('bad')</script> café" } };
