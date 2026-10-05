@@ -343,6 +343,39 @@ test("the packaged session reads a stream for the active level and keeps that le
     expect(failed.status).toBe("paused");
     expect(failed.frame(320, 240)!.draws.length).toBeGreaterThan(0);
 });
+test("a package without a world partition does not claim cell streaming", () => {
+    expect(load().worldPartition).toBeNull();
+});
+test("streamed world-partition cells count as used files and inline cells are refused", () => {
+    const manifest = fixture();
+    const bytes = streamFile(manifest, "buffer");
+    const extra = Uint8Array.from([9, 8, 7]);
+    manifest.files = [...manifest.files, { id: "far", kind: "buffer" as const, bytes: extra.length, sha256: createHash("sha256").update(extra).digest("hex") } as unknown as GamePackageManifest["files"][number]];
+    manifest.worldPartition = {
+        anchor: "home", loadRadius: 8, unloadRadius: 16,
+        cells: [
+            { id: "home", min: [-1, 0, 0], max: [1, 1, 1], file: "buffer" },
+            { id: "away", min: [40, 0, 0], max: [42, 1, 1], file: "far" }
+        ]
+    };
+    const reader = createPackageReader(JSON.stringify(manifest), { async read(id: string) {
+        if (id === "buffer") return bytes;
+        if (id === "far") return extra;
+        throw new Error(id);
+    } });
+    expect(reader.worldPartition?.anchor).toBe("home");
+    expect(reader.worldPartition?.cells.map(cell => cell.sha256)).toHaveLength(2);
+    expect(reader.worldPartition?.budgetBytes).toBe(GAME_PACKAGE_LIMITS.assetBytes);
+    const inline = fixture();
+    inline.worldPartition = { anchor: "home", loadRadius: 8, unloadRadius: 16, cells: [{ id: "home", min: [-1, 0, 0], max: [1, 1, 1], file: "buffer" }] };
+    expect(() => load(inline)).toThrow(/streamed buffer, image or hdr/);
+    const tight = fixture();
+    const streamed = streamFile(tight, "buffer");
+    tight.worldPartition = { anchor: "home", loadRadius: 8, unloadRadius: 4, cells: [{ id: "home", min: [-1, 0, 0], max: [1, 1, 1], file: "buffer" }] };
+    expect(() => createPackageReader(JSON.stringify(tight), { async read() { return streamed; } })).toThrow(/unload radius/);
+    tight.worldPartition = { anchor: "missing", loadRadius: 8, unloadRadius: 16, cells: [{ id: "home", min: [-1, 0, 0], max: [1, 1, 1], file: "model" }] };
+    expect(() => createPackageReader(JSON.stringify(tight), { async read() { return streamed; } })).toThrow(/streamed buffer, image or hdr/);
+});
 test("network and missing image dependencies in model JSON are refused eagerly", () => {
     for (const uri of ["https://example.com/image.png", "missing.png", "data:image/svg+xml;base64,PHN2Zz4="]) {
         const manifest = fixture(), json = JSON.parse(Buffer.from(manifest.files[0].data, "base64").toString("utf8"));

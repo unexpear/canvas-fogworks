@@ -1,6 +1,8 @@
 # Inline game package v1 — manifest and read-only resolver
 
-<!-- describes: src/runtime/GamePackage.ts, src/runtime/PackageProfile.ts, src/runtime/GamePackage.test.ts, src/runtime/RuntimeBoundary.test.ts, scripts/smoke-level-transition.js -->
+<!-- describes: src/runtime/GamePackage.ts, src/runtime/PackageProfile.ts, src/runtime/GamePackage.test.ts, src/runtime/RuntimeBoundary.test.ts, src/runtime/WorldPartition.ts, src/runtime/worldPartitionTable.js, scripts/smoke-level-transition.js -->
+<!-- re-read 2026-10-04: optional worldPartition names streamed cells. Package version stays 1.
+     A missing cell table is not world-partition streaming. The 32 MiB payload budget is unchanged. -->
 <!-- re-read 2026-10-02: optional saveMigrations names previous content hashes. Package version stays 1.
      buffer, image and HDR files may be streamed by hash; models and fonts stay inline. -->
 
@@ -38,6 +40,7 @@ Unknown fields are refused in the v1 envelope and its level/link/resource/file r
 | `files` | Inline `{ id, kind, bytes, data }` or, for `buffer`/`image`/`hdr` only, streamed `{ id, kind, bytes, sha256 }` |
 | `fonts` | Optional array of `{ family, weight, italic, file }`. Absent means no custom faces |
 | `saveMigrations` | Optional array of `{ fromGameId, versions }`, at most eight. `fromGameId` is a previous package-content SHA-256. `versions` lists progress format versions 1–6 that this build may adopt from that hash. Absent or empty means no cross-build adoption. Package version stays 1. Older readers that refuse unknown fields reject a package that includes this array |
+| `worldPartition` | Optional `{ anchor, loadRadius, unloadRadius, cells }`. Each cell is `{ id, min, max, file }` and `file` must be a streamed `buffer`, `image` or `hdr` payload. `anchor` names one cell that stays the playable core. `unloadRadius` is at least `loadRadius`. Absent means the package is not world-partition streamed. Models and fonts stay inline. Older readers that refuse unknown fields reject a package that includes this object |
 
 IDs contain lowercase ASCII letters, digits, `_` and `-`, start with a letter/digit and are at
 most 64 characters. Reserved prototype names are refused. Duplicate level/file IDs are errors.
@@ -139,7 +142,10 @@ bounded by its enclosing serialized level/model and the inline decode limit. The
 sum is not a bound on total decoded scene images, GPU residency or JavaScript heap. JSON parsing,
 base64 validation, temporary byte arrays, hydrated geometry and repeated per-level uses add memory.
 Declared stream sizes count toward the same 16 MiB file and 32 MiB sum limits. Moving those bytes
-out of the JSON does not raise the limits, and it is not world-partition or music streaming.
+out of the JSON does not raise the limits, and it is not music streaming. A `worldPartition` block
+is separate: it names cells whose streamed payloads a caller can load and release around a focus.
+The anchor stays resident when a neighbor fails or is cancelled. Residency cannot exceed the same
+32 MiB sum. The packaged player validates the block and does not move the focus from the camera.
 
 Byte counts and strict encoding catch malformed/truncated payloads but are **not cryptographic
 integrity or authenticity**. A same-length malicious edit can still be structurally valid.
@@ -173,9 +179,13 @@ directory before launching the packaged HTML, then checks WebGL, the packaged fa
 text and one played embedded cue. Package tests also drive a level transition that reads a streamed
 chunk and keep the current level when that chunk's hash does not match. `npm run check:player-exe-evidence`
 scores a clean-machine unpacked EXE record and writes an operator plan; with no file it exits 2,
-and that exit is not a pass. No clean-machine result is recorded here. Signatures, publisher
-identity, world-partition streaming and the complete F1 gate remain open. Do not mark F1 complete
-on this smoke alone.
+and that exit is not a pass. No clean-machine result is recorded here. `check:package-signature`
+accepts a detached signature only when a certificate, publisher, signature and matching trust
+anchor are all supplied. A missing certificate or publisher exits 2 and is not a pass. The exporter
+still writes `publisher`, `signature` and `certificate` as null. `check:world-partition` exits 2
+when the package has no cell table; that exit is not a pass. No release certificate or publisher
+identity is recorded here. The complete F1 gate remains open. Do not mark F1 complete on this
+smoke alone.
 
 Encoding behavior was checked against [TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder/encode)
 and [base64 byte conversion](https://developer.mozilla.org/en-US/docs/Web/API/Window/btoa).

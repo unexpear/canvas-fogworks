@@ -55,6 +55,12 @@ export interface GameProvenance {
     sourceRevision: string | null;
     manifestSha256: string;
     authenticity: "unsigned";
+    /** This exporter has no publisher identity. A non-null value is refused. */
+    publisher: null;
+    /** This exporter has no signature. A non-null value is refused. */
+    signature: null;
+    /** This exporter has no certificate. A non-null value is refused. */
+    certificate: null;
     files: { id: string; kind: PackageFileKind; bytes: number; sha256: string; placement: "inline" | "stream" }[];
     fonts: { family: string; weight: number; italic: boolean; file: string; sha256: string }[];
     warnings: Pick<PackageDiagnostic, "code" | "feature" | "subject" | "detail">[];
@@ -282,7 +288,7 @@ export function gameProvenance(serialized: string, identity: ProvenanceIdentity)
     return { format: "canvas-fogworks-game-provenance", version: 1, profile: "spatial3d-v1",
         packageFormat: "canvas-fogworks-game", packageVersion: 1, appVersion: identity.appVersion,
         sourceRevision: identity.sourceRevision, manifestSha256: createHash("sha256").update(serialized).digest("hex"),
-        authenticity: "unsigned",
+        authenticity: "unsigned", publisher: null, signature: null, certificate: null,
         files: manifest.files.map(file => ({ id: file.id, kind: file.kind, bytes: file.bytes, sha256: fileHash(file),
             placement: "sha256" in file ? "stream" as const : "inline" as const })),
         fonts: (manifest.fonts ?? []).map(font => {
@@ -293,10 +299,23 @@ export function gameProvenance(serialized: string, identity: ProvenanceIdentity)
         warnings: reader.warnings.map(warning => ({ code: warning.code, feature: warning.feature, subject: warning.subject, detail: warning.detail })) };
 }
 
+/** Stamp a caller-supplied cell table onto an already streamed package. This does not invent cells or load their bytes. */
+export function attachWorldPartition(serialized: string, partition: unknown): string {
+    const manifest = JSON.parse(serialized) as GamePackageManifest;
+    if (Object.prototype.hasOwnProperty.call(manifest, "worldPartition")) throw new Error("World partition is already declared.");
+    const next = JSON.stringify({ ...manifest, worldPartition: partition });
+    const streamed = (JSON.parse(next) as GamePackageManifest).files.some(file => "sha256" in file);
+    createPackageReader(next, streamed ? { async read() { throw new Error("Attaching a world partition does not load chunk bytes."); } } : undefined);
+    return next;
+}
+
 /** Player HTML. Inline payloads are embedded. Streamed buffer, image and HDR bytes stay in sibling chunk files for the desktop host. The digest detects accidental manifest damage, not a signature. */
 export function game3DHtml(serialized: string, bundle: Buffer, provenance?: GameProvenance): string {
     const identity = provenance ?? gameProvenance(serialized, { appVersion: "0.0.5", sourceRevision: null });
     if (identity.manifestSha256 !== createHash("sha256").update(serialized).digest("hex")) throw new Error("Provenance does not match this package.");
+    if (identity.authenticity !== "unsigned" || identity.publisher !== null || identity.signature !== null || identity.certificate !== null) {
+        throw new Error("This export has no publisher or signature.");
+    }
     if (!bundle.length || bundle.length > 8 * 1024 * 1024) throw new Error("Invalid player bundle size.");
     const digest = identity.manifestSha256;
     const report = JSON.stringify(identity).replace(/</g, "\\u003c");

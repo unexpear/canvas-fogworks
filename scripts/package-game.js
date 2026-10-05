@@ -14,6 +14,7 @@ function sourceRevision(root) {
 }
 async function packageGame(project, destination, desktopOrOptions = false) {
     const options = desktopOrOptions && typeof desktopOrOptions === "object" ? desktopOrOptions : { desktop: desktopOrOptions === true };
+    if (options.worldPartition && !options.stream) throw new Error("World-partition cells require --stream.");
     const root = path.resolve(__dirname, ".."), output = path.resolve(destination);
     // No deletion or reuse: an existing path (including a link) fails before any build writes.
     fs.mkdirSync(output);
@@ -21,7 +22,7 @@ async function packageGame(project, destination, desktopOrOptions = false) {
     const collector = path.join(output, "collector.cjs");
     await build({ entryPoints: [path.join(root, "src/electron/GamePackageExport.ts")], bundle: true,
         platform: "node", format: "cjs", target: "node22", outfile: collector });
-    const { collectGamePackage, externalizePackageStreams, game3DHtml, gameProvenance } = require(collector);
+    const { collectGamePackage, externalizePackageStreams, attachWorldPartition, game3DHtml, gameProvenance } = require(collector);
     const file = fs.realpathSync.native(project);
     if (fs.statSync(file).size > 20_000_000) throw new Error("Entry project exceeds 20MB.");
     let serialized = await collectGamePackage(file, fs.readFileSync(file, "utf8"), { fontsDirectory: options.fontsDirectory });
@@ -37,6 +38,7 @@ async function packageGame(project, destination, desktopOrOptions = false) {
             }
         }
     }
+    if (options.worldPartition) serialized = attachWorldPartition(serialized, options.worldPartition);
     const player = await build({ entryPoints: [path.join(root, "src/player3d/index.ts")], bundle: true,
         platform: "browser", format: "iife", target: "es2020", minify: true, write: false });
     const provenance = gameProvenance(serialized, { appVersion: require(path.join(root, "package.json")).version, sourceRevision: sourceRevision(root) });
@@ -64,11 +66,18 @@ async function packageGame(project, destination, desktopOrOptions = false) {
     return output;
 }
 function parsePackageArgs(argv) {
-    let project, destination, desktop = false, stream = false, fontsDirectory;
+    let project, destination, desktop = false, stream = false, fontsDirectory, worldPartition;
     for (let index = 0; index < argv.length; index++) {
         const arg = argv[index];
         if (arg === "--desktop") desktop = true;
         else if (arg === "--stream") stream = true;
+        else if (arg === "--world-partition") {
+            const file = argv[++index];
+            if (!file || file.startsWith("--")) throw new Error("Missing world-partition declaration.");
+            const text = fs.readFileSync(file, "utf8");
+            if (Buffer.byteLength(text) > 1024 * 1024) throw new Error("World-partition declaration exceeds 1MB.");
+            worldPartition = JSON.parse(text);
+        }
         else if (arg === "--fonts") {
             fontsDirectory = argv[++index];
             if (!fontsDirectory || fontsDirectory.startsWith("--")) throw new Error("Missing font directory.");
@@ -78,14 +87,14 @@ function parsePackageArgs(argv) {
         else throw new Error("Too many arguments.");
     }
     if (!project || !destination) throw new Error("Missing project or output directory.");
-    return { project, destination, desktop, stream, fontsDirectory };
+    return { project, destination, desktop, stream, fontsDirectory, worldPartition };
 }
 if (require.main === module) {
     try {
         const options = parsePackageArgs(process.argv.slice(2));
         packageGame(options.project, options.destination, options).catch(error => { console.error(error); process.exitCode = 1; });
     } catch (error) {
-        console.error(`${error.message}\nUsage: npm run package:game -- "entry.vde" "NEW output directory" [--desktop] [--stream] [--fonts directory]`);
+        console.error(`${error.message}\nUsage: npm run package:game -- "entry.vde" "NEW output directory" [--desktop] [--stream] [--fonts directory] [--world-partition declaration.json]`);
         process.exitCode = 1;
     }
 }
