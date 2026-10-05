@@ -39,6 +39,7 @@ async function child(mode, dir) {
         process.send({ ready: true });
         await new Promise(() => { setInterval(() => {}, 1000); });
     };
+    let renamed = false;
     const io = { ...fs.promises,
         open: async (file, ...args) => {
             const handle = await fs.promises.open(file, ...args);
@@ -50,14 +51,15 @@ async function child(mode, dir) {
                 },
                 sync: async () => {
                     await handle.sync();
-                    if (!directory && mode === "flushed") await pause();
-                    if (directory && mode === "directory-synced") await pause();
+                    if (!directory && mode === "flushed" && !renamed) await pause();
+                    if (directory && mode === "directory-synced" && renamed) await pause();
                 }
             };
         },
         rename: async (...args) => {
             if (mode === "before-rename") await pause();
             await fs.promises.rename(...args);
+            renamed = true;
             if (mode === "after-rename") await pause();
         }
     };

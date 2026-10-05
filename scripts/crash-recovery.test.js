@@ -2,11 +2,12 @@
  * @module crash-recovery.test
  * @description Kills isolated real writer processes at editing/save and dependency-copy checkpoints, then restores in a fresh process using the production session, atomic writer and dependency copier.
  * The directory-fsync kill is still a process failure, not a power-loss proof. Planting a filesSynced journal after its name was removed is not a power-loss proof either.
+ * A crash before the commit marker's directory flush can still drop a new name. Jest covers that model.
  */
 const fs = require("fs"), path = require("path"), os = require("os");
 const { fork, spawnSync } = require("child_process");
 const { atomicWrite } = require("../src/electron/atomicWrite");
-const { copyProjectDependencies, DEPENDENCY_JOURNAL_NAME } = require("../src/electron/projectDependencies");
+const { copyProjectDependencies, readDependencyJournal, DEPENDENCY_JOURNAL_NAME } = require("../src/electron/projectDependencies");
 
 function sessionApi() {
     const Module = require("module"), esbuild = require("esbuild");
@@ -37,7 +38,6 @@ async function dependencyCheckpoint(mode, dir) {
         fs.writeFileSync(path.join(source, "color.png"), "owned texture");
         fs.writeFileSync(path.join(dest, "notes.txt"), "keep");
         const atomic = require("../src/electron/atomicWrite");
-        const realWrite = atomic.atomicWrite.bind(atomic);
         if (mode === "dep-partial") {
             const writeFile = fs.promises.writeFile.bind(fs.promises);
             fs.promises.writeFile = async (file, data, options) => {
@@ -48,28 +48,24 @@ async function dependencyCheckpoint(mode, dir) {
                 return writeFile(file, data, options);
             };
         } else if (mode === "dep-commit-before-dirsync") {
-            atomic.atomicWrite = async (target, data, io) => {
-                if (!String(data).includes('"filesSynced":true')) return realWrite(target, data, io);
-                const wrapped = {
-                    stat: fs.promises.stat.bind(fs.promises),
-                    rename: fs.promises.rename.bind(fs.promises),
-                    unlink: fs.promises.unlink.bind(fs.promises),
-                    readdir: fs.promises.readdir.bind(fs.promises),
-                    open: async (file, ...args) => {
-                        const handle = await fs.promises.open(file, ...args);
-                        if (file !== path.dirname(target)) return handle;
-                        return {
-                            sync: async () => { await pause(); return handle.sync(); },
-                            close: () => handle.close()
-                        };
-                    }
-                };
-                return realWrite(target, data, wrapped);
+            const realAppend = atomic.appendFileSynced.bind(atomic);
+            atomic.appendFileSynced = async (target, data, io) => {
+                const result = await realAppend(target, data, io);
+                if (String(data).includes('"filesSynced":true')) await pause();
+                return result;
             };
         } else if (mode === "dep-commit-dirsynced") {
-            atomic.atomicWrite = async (target, data, io) => {
-                const result = await realWrite(target, data, io);
-                if (String(data).includes('"filesSynced":true')) await pause();
+            const realAppend = atomic.appendFileSynced.bind(atomic);
+            const realSync = atomic.syncDirectory.bind(atomic);
+            let armed = false;
+            atomic.appendFileSynced = async (target, data, io) => {
+                const result = await realAppend(target, data, io);
+                if (String(data).includes('"filesSynced":true')) armed = true;
+                return result;
+            };
+            atomic.syncDirectory = async (directory, io) => {
+                const result = await realSync(directory, io);
+                if (armed) await pause();
                 return result;
             };
         } else if (mode === "dep-unlinked") {
@@ -112,6 +108,7 @@ async function child(mode, dir) {
         process.send({ ready: true });
         await new Promise(() => { setInterval(() => {}, 1000); });
     };
+    let renamed = false;
     const io = { ...fs.promises,
         open: async (file, ...args) => {
             const handle = await fs.promises.open(file, ...args);
@@ -123,14 +120,15 @@ async function child(mode, dir) {
                 },
                 sync: async () => {
                     await handle.sync();
-                    if (!directory && mode === "flushed") await pause();
-                    if (directory && mode === "directory-synced") await pause();
+                    if (!directory && mode === "flushed" && !renamed) await pause();
+                    if (directory && mode === "directory-synced" && renamed) await pause();
                 }
             };
         },
         rename: async (...args) => {
             if (mode === "before-rename") await pause();
             await fs.promises.rename(...args);
+            renamed = true;
             if (mode === "after-rename") await pause();
         }
     };
@@ -190,20 +188,22 @@ if (process.argv[2] === "--child") {
             const journal = path.join(dest, DEPENDENCY_JOURNAL_NAME);
             try {
                 if (phase === "dep-partial") {
-                    const parsed = JSON.parse(fs.readFileSync(journal, "utf8"));
+                    const parsed = readDependencyJournal(fs.readFileSync(journal));
                     assert.notEqual(parsed.filesSynced, true);
                     assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "PARTIAL");
-                } else if (phase === "dep-unlinked") {
+                } else if (phase === "dep-unlinked" || phase === "dep-commit-dirsynced") {
                     assert.equal(fs.existsSync(journal), false);
                     assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "owned texture");
-                    // The name is gone in this process. Putting the flushed record back simulates a
-                    // directory entry that returned; it does not unplug the disk.
-                    fs.writeFileSync(journal, JSON.stringify({
-                        version: 1, directories: ["models"],
-                        files: ["models/shape.gltf", "models/shape.bin", "color.png"], filesSynced: true
-                    }));
+                    if (phase === "dep-unlinked") {
+                        // The name is gone in this process. Putting the flushed record back simulates a
+                        // directory entry that returned; it does not unplug the disk.
+                        fs.writeFileSync(journal, JSON.stringify({
+                            version: 1, directories: ["models"],
+                            files: ["models/shape.gltf", "models/shape.bin", "color.png"], filesSynced: true
+                        }));
+                    }
                 } else {
-                    const parsed = JSON.parse(fs.readFileSync(journal, "utf8"));
+                    const parsed = readDependencyJournal(fs.readFileSync(journal));
                     assert.equal(parsed.filesSynced, true);
                     assert.equal(fs.readFileSync(path.join(dest, "color.png"), "utf8"), "owned texture");
                     assert.equal(fs.readFileSync(path.join(dest, "models", "shape.bin"), "utf8"), "owned mesh");
