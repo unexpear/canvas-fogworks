@@ -3,6 +3,7 @@ import {gameReference} from "../examples/ReferenceProjects";
 import {ActionDispatcher} from "../actions/ActionDispatcher";
 import {SetSpatial3DAction} from "../actions/SetSpatial3DAction";
 import {deserializeDocument,serializeDocument} from "./Serializer";
+import {SCHEMA_VERSION} from "./Document";
 import {IDENTITY_TRANSFORM_3D,Spatial3D} from "./Spatial3D";
 import {buildFrame3D} from "../../renderer/Scene3D";
 import {copySpatial3D} from "../../renderer/Gizmo3D";
@@ -11,7 +12,7 @@ test("blockout parameters survive Action undo/redo, serialization and transform 
     const doc=gameReference(),dispatcher=new ActionDispatcher(doc);
     expect(dispatcher.dispatchAction(new SetSpatial3DAction(doc,"goal",spatial)).success).toBe(true);
     const saved=serializeDocument(dispatcher.getDocument()),parsed=JSON.parse(saved);
-    expect(parsed.version).toBe("89");expect(saved).not.toContain("positions");
+    expect(parsed.version).toBe(SCHEMA_VERSION);expect(saved).not.toContain("positions");
     const reopened=deserializeDocument(saved);expect(reopened.nodes.get("goal")!.spatial3d).toEqual(spatial);
     const copy=copySpatial3D(reopened.nodes.get("goal")!.spatial3d!);copy.blockout!.width=9;
     expect(reopened.nodes.get("goal")!.spatial3d!.blockout!.width).toBe(4);

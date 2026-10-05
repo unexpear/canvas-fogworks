@@ -6,6 +6,7 @@ and debugging; general behavior lifecycle remains open. Player-progress v2 retai
 continuations and accepts v1 saves without them.
 
 <!-- describes: src/core/document/Gameplay.ts, src/core/runtime/InputActions.ts, src/core/runtime/Interaction.ts, src/core/runtime/GameplaySession.ts, src/core/runtime/Gameplay3D.ts, src/core/runtime/World3D.ts, src/runtime/PlayerProgress.ts, src/runtime/CampaignProgress.ts, src/runtime/PlayerSession3D.ts, src/player3d, src/player, src/app/GameplayPanel.tsx -->
+<!-- re-read 2026-10-04: schema 90 stores the migration list on the document. Player-progress formats are unchanged. Full prefabs remain open. -->
 <!-- re-read 2026-10-02: explicit save-build maps and progress-writer kill checks are described above. Schema 89 and progress v1–v6 records are unchanged. -->
 
 Implemented 2026-09-12 as the first bounded Q06 slice. These features serve both 2D and 3D;
@@ -131,8 +132,7 @@ Embedded 3D sound cues now play through the same bounded Web Audio path as 2D. S
 reusable audio assets remain [AUDIO-001](BACKLOG.json). Explicit cross-build adoption is covered by
 `SaveMigration` tests. `npm run test:progress-crash` kills the progress writer and reads the last
 committed slot in a fresh process; it is not a power-loss proof or a GUI renderer crash.
-Still open in Q06/F2: full prefab instances, an editor control for the migration list, richer
-character/physics semantics and portable/browser save UX. Document schema 89 is unchanged: the
-progress record and project file did not gain fields. The 3D package keeps version 1 and adds an
-optional `saveMigrations` field, following the same optional-field rule as `fonts`.
+The inspector authors the migration list on the document (schema 90). Still open in Q06/F2: full prefab instances, richer
+character/physics semantics and portable/browser save UX. The progress record did not gain fields.
+The 3D package keeps version 1 and its optional `saveMigrations` field, following the same optional-field rule as `fonts`.
 F1 clean-machine certification is also still open. Existing installers/assets are retained.

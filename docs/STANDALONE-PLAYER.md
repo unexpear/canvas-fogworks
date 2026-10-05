@@ -1,6 +1,7 @@
 # Standalone 3D export and Windows player
 
 <!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/playerExeEvidence.js, scripts/check-player-exe-evidence.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-10-04: the editor can author save migrations on the document. Package version 1 and the EXE evidence gate are unchanged. -->
 <!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes.
      --stream writes buffer/image/HDR chunks beside the player. Models, fonts, embedded cues and
      screen-space text stay on their existing paths. check:player-exe-evidence scores a clean-machine
@@ -171,7 +172,7 @@ exits 2. That exit is the open manual gate, not a pass. This repository does not
 result, and the checker does not launch the EXE or apply a certificate.
 
 Still open: a recorded clean Windows-machine pass of the unpacked EXE; prefab campaign snapshots,
-portable save files, multiple slots and an editor control for save migrations; long-session/GPU/device-loss evidence;
+portable save files and multiple slots; long-session/GPU/device-loss evidence;
 world-partition streaming, signatures, trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.

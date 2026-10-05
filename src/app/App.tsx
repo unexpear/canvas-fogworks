@@ -14,6 +14,8 @@ import {
 } from "./RecoveryRestore";
 import { stepGameplay } from "../core/runtime/GameplaySession";
 import { RuntimeAudio } from "./RuntimeAudio";
+import { SetSaveMigrationsAction } from "../core/actions/SetSaveMigrationsAction";
+import { SaveMigrationsPanel } from "./SaveMigrationsPanel";
 import { BehaviorDebugPanel } from "./BehaviorDebugPanel";
 import { advanceBehaviors2D } from "../core/runtime/GameplaySession";
 import { advanceBehaviors3D } from "../core/runtime/Gameplay3D";
@@ -3290,6 +3292,14 @@ export function App() {
                 )}
                 <div style={{ width: 220, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
                     <div style={PANEL_HEADING}>Inspector</div>
+                    <SaveMigrationsPanel
+                        migrations={dispatcher.getDocument().saveMigrations}
+                        onChange={next => {
+                            const result = dispatcher.dispatchAction(new SetSaveMigrationsAction(dispatcher.getDocument(), next));
+                            refresh();
+                            return result.success;
+                        }}
+                    />
                     {node && selectedNodeId ? (
                         <div style={{ fontSize: 11, lineHeight: 1.6 }}>
                             <div style={{ color: "#666", marginBottom: 6 }}>{nodeTypeLabel(node.type)} — {selectedNodeId.slice(0, 8)}</div>

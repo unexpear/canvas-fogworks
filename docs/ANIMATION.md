@@ -1,6 +1,7 @@
 # Animation workflow
 
 <!-- describes: src/core/document/AnimationController.ts, src/core/runtime/AnimationPlayback.ts, src/core/runtime/AnimationWorld.ts, src/app/AnimationPanel.tsx, src/app/TimelineTransport.tsx, src/app/App.tsx -->
+<!-- re-read 2026-10-04: the inspector shows the document save-migration editor. Animation authoring is unchanged. -->
 <!-- re-read 2026-10-02: Play, scrub, key, hold and onion skin are TimelineTransport.tsx.
      App.tsx still owns the preview clock, keyframe actions, one-shot restart and clip selection.
      Clip authoring stays in AnimationPanel. Runtime sampling is unchanged. -->

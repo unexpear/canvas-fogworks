@@ -1,6 +1,7 @@
 # Action System
 
 <!-- describes: src/core/actions -->
+<!-- re-read 2026-10-04: SetSaveMigrationsAction writes the optional document save list. Other actions are unchanged. -->
 <!-- re-read 2026-08-13 after schema 67: the catalogue was missing SIX actions — SetTilesetsAction
      and SetClipsAction (both new, and both the write path a shipped field had gone without), plus
      SetLightingAction, SetMeshAction, SetInteractionsAction and SetNodeFlagsAction, which had been
@@ -11,7 +12,7 @@
      terrain's material LIST position by position, because reordering two materials redraws every
      shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
 
-> 🔒 Frozen contract · schema v89 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v90 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
 
 Reusable behavior tables use `SetBehaviorAssetsAction`; promotion may bind an entity in the same
 mutation. Transactions preserve the independent `behaviorAssets` document delta. Referenced assets

@@ -10,6 +10,7 @@ See [the active delivery goal](GAMEPLAY-FIVE-PART-GOAL.md) for current progress
 and remaining verification; the five-part goal is not complete.
 
 <!-- describes: src/core/document/BehaviorGraph.ts, src/core/document/Entity.ts, src/core/runtime/BehaviorRunner.ts, src/core/runtime/BehaviorRuntime.ts, src/core/runtime/BehaviorProgress.ts, src/core/document/BehaviorAssets.ts, src/core/actions/SetBehaviorAssetsAction.ts, src/app/BehaviorDebugPanel.tsx, src/runtime/PlayerProgress.ts, src/runtime/CampaignProgress.ts, src/core/runtime/GameplaySession.ts, src/core/runtime/Gameplay3D.ts, src/core/runtime/Interaction.ts, src/core/runtime/World.ts, src/app/BehaviorGraphPanel.tsx, src/app/GameplayPanel.tsx, scripts/smoke-behavior.js -->
+<!-- re-read 2026-10-04: the inspector authors the save-migration list. Graph execution is unchanged. Full prefabs remain open. -->
 <!-- re-read 2026-10-02: cross-build adoption lives beside player progress and does not change
      graph execution, function libraries or the progress record shape. -->
 <!-- re-read 2026-09-28: Gameplay3D collects embedded sound cues for the host, including a
@@ -218,10 +219,11 @@ Current follow-up tests cover delay/repeat parity in both runtimes, v1/v2 progre
 validation, breakpoint/step/pause semantics, cancellation, bounded queues/execution and asset undo.
 The graph-authoring smoke also exercises delay/repeat authoring and shared-asset promotion/detach.
 
-Further ENG-04/Q06 work: full prefabs, an editor control for save-migration lists,
+Further ENG-04/Q06 work: full prefabs,
 cross-project asset management, script/graph equivalence and a
 freeform wiring canvas. Lifecycle events, typed variables, callable functions, visited-level
-campaign saves, named-input controls, explicit cross-build progress adoption and progress-writer
+campaign saves, named-input controls, explicit cross-build progress adoption, the inspector
+for that migration list, and progress-writer
 kill/relaunch checks are delivered. The kill check is not a power-loss proof. General NPC behavior trees remain separate work.
 
 Implementation references: [React immutable array updates](https://react.dev/learn/updating-arrays-in-state),

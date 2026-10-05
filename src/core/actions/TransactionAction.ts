@@ -134,6 +134,7 @@ export class TransactionAction extends Action {
         let screenDelta: Extract<NodeDelta, { kind: "screen" }> | null = null;
         let gameplayVariablesDelta: Extract<NodeDelta, {kind:"gameplayVariables"}> | null = null;
         let behaviorFunctionsDelta: Extract<NodeDelta, {kind:"behaviorFunctions"}> | null = null;
+        let saveMigrationsDelta: Extract<NodeDelta, { kind: "saveMigrations" }> | null = null;
         let behaviorAssetsDelta: Extract<NodeDelta, { kind: "behaviorAssets" }> | null = null;
         let assets3dDelta: Extract<NodeDelta, { kind: "assets3d" }> | null = null;
 
@@ -180,6 +181,8 @@ export class TransactionAction extends Action {
                     gameplayVariablesDelta = delta;
                 } else if (delta.kind === "behaviorFunctions") {
                     behaviorFunctionsDelta = delta;
+                } else if (delta.kind === "saveMigrations") {
+                    saveMigrationsDelta = delta;
                 } else if (delta.kind === "behaviorAssets") {
                     behaviorAssetsDelta = delta;
                 } else if (delta.kind === "assets3d") {
@@ -224,7 +227,7 @@ export class TransactionAction extends Action {
         // `applyMutations` was already indifferent — "the key is ignored, the KIND carries the
         // meaning" — so the change is confined to who may share the map.
         const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta, lightingDelta,
-            clipsDelta, tilesetsDelta, backgroundDelta, screenDelta, assets3dDelta, behaviorAssetsDelta, gameplayVariablesDelta, behaviorFunctionsDelta].filter(d => d !== null);
+            clipsDelta, tilesetsDelta, backgroundDelta, screenDelta, assets3dDelta, behaviorAssetsDelta, gameplayVariablesDelta, behaviorFunctionsDelta, saveMigrationsDelta].filter(d => d !== null);
         for (const delta of documentDeltas) {
             finalDeltas.set(documentDeltaKey((delta as NodeDelta & { kind: string }).kind), delta as NodeDelta);
         }
