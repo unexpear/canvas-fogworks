@@ -11,6 +11,8 @@ const { hardwareGpuVerdict } = require("./validate-hardware-gpu");
 const GUEST_EVIDENCE_KIND = "windows-sandbox-installer-lifecycle";
 const GUEST_HARDWARE_CLAIM = "not-certified-by-software-sandbox";
 const HOST_GPU_EVIDENCE_KIND = "host-hardware-gpu";
+const REQUIRED_WINDOWS_HOST = "DESKTOP-2SB8IKI";
+const SMOKE_PASS_MARK = "smoke passed";
 
 function expectedGuestSmokeLogs(phases = guestLifecyclePhases()) {
     const logs = [];
@@ -54,6 +56,9 @@ function evaluateGuestLifecycleResult(result, options = {}) {
     if (result.certifiesHardware === true || result.hardwareCertified === true) {
         failures.push("A software sandbox result cannot certify a hardware GPU.");
     }
+    if (!/^[0-9A-Fa-f]{64}$/.test(String(result.installerSha256 ?? ""))) {
+        failures.push("installerSha256 must be the 64-character hex hash of the current installer.");
+    }
     const required = guestLifecyclePhases().map(phase => phase.id);
     const completed = phaseList(result.completedPhases);
     const sameOrder = completed.length === required.length && required.every((id, index) => completed[index] === id);
@@ -63,9 +68,18 @@ function evaluateGuestLifecycleResult(result, options = {}) {
             ? `Missing completed phases: ${missing.join(", ")}.`
             : "completedPhases must list every extended lifecycle phase in order.");
     }
-    if (options.resultsDir) {
-        const missingLogs = expectedGuestSmokeLogs().filter(name => !fs.existsSync(path.join(options.resultsDir, name)));
+    if (!options.resultsDir) {
+        failures.push("Guest result directory is required so smoke logs can be checked.");
+    } else {
+        const names = expectedGuestSmokeLogs();
+        const missingLogs = names.filter(name => !fs.existsSync(path.join(options.resultsDir, name)));
         if (missingLogs.length) failures.push(`Missing smoke logs: ${missingLogs.join(", ")}.`);
+        const weakLogs = names.filter(name => {
+            if (!name.endsWith(".stdout.log")) return false;
+            const full = path.join(options.resultsDir, name);
+            return fs.existsSync(full) && !fs.readFileSync(full, "utf8").includes(SMOKE_PASS_MARK);
+        });
+        if (weakLogs.length) failures.push(`Smoke stdout logs must contain "${SMOKE_PASS_MARK}": ${weakLogs.join(", ")}.`);
     }
     return { acceptable: failures.length === 0, certifiesHardwareGpu: false, failures };
 }
@@ -73,19 +87,30 @@ function evaluateGuestLifecycleResult(result, options = {}) {
 function evaluateHardwareGpuEvidence(record) {
     const failures = [];
     if (!record || typeof record !== "object" || Array.isArray(record)) {
-        return { acceptable: false, failures: ["Hardware GPU evidence is not an object."] };
+        return { acceptable: false, hostname: "", failures: ["Hardware GPU evidence is not an object."] };
     }
+    const hostname = typeof record.hostname === "string" ? record.hostname.trim() : "";
     if (record.evidenceKind !== HOST_GPU_EVIDENCE_KIND) failures.push(`evidenceKind must be ${HOST_GPU_EVIDENCE_KIND}.`);
     if (record.sandbox !== false) failures.push("sandbox must be false. The software-rendered guest cannot certify a hardware GPU.");
-    if (record.virtualGpu === "enabled") failures.push("virtualGpu must stay unused for host hardware evidence.");
+    if (record.virtualGpu !== "not-used") failures.push('virtualGpu must be "not-used". Host hardware evidence is collected outside Sandbox.');
+    if (!hostname) failures.push("hostname must name the Windows host that drew the frame.");
+    if (typeof record.recordedAt !== "string" || Number.isNaN(Date.parse(record.recordedAt))) {
+        failures.push("recordedAt must be an ISO timestamp from the host draw.");
+    }
     const recomputed = hardwareGpuVerdict(record.renderer, { drawOk: record.drawOk === true });
+    if (record.classification !== recomputed.classification) {
+        failures.push(`classification ${JSON.stringify(record.classification ?? null)} does not match the renderer string (${recomputed.classification}).`);
+    }
+    if (record.certifiesHardware !== recomputed.certifiesHardware) {
+        failures.push("certifiesHardware does not match the recomputed verdict.");
+    }
     if (!recomputed.certifiesHardware) {
         failures.push(`Renderer does not certify hardware (${recomputed.classification}: ${recomputed.reason}).`);
     }
     if (record.certifiesHardware !== true) failures.push("certifiesHardware must be true.");
     if (record.classification !== "hardware") failures.push("classification must be hardware.");
     if (record.drawOk !== true) failures.push("drawOk must be true.");
-    return { acceptable: failures.length === 0, failures };
+    return { acceptable: failures.length === 0, hostname, failures };
 }
 
 function installerEvidencePlan(options = {}) {
@@ -105,29 +130,35 @@ function installerEvidencePlan(options = {}) {
         virtualGpu: "disabled",
         publisherMetadata: false,
         signing: false,
-        reason: "This plan does not launch Windows Sandbox or sample a hardware GPU.",
+        requiredHost: REQUIRED_WINDOWS_HOST,
+        reason: "This plan does not launch Windows Sandbox or sample a hardware GPU. Exit 2 with no files is the open manual gate, not a pass.",
         commands: [
-            { step: 1, host: "windows", command: "npm run build:installer-test-baseline" },
-            { step: 2, host: "windows", command: "npm run prepare:installer-sandbox" },
-            { step: 3, host: "windows", command: "Open the generated installer-test.wsb in Windows Sandbox. Leave virtual GPU disabled." },
-            { step: 4, host: "windows", command: hardwareGpu.command },
+            { step: 1, host: REQUIRED_WINDOWS_HOST, command: "npm run build:installer-test-baseline" },
+            { step: 2, host: REQUIRED_WINDOWS_HOST, command: "npm run prepare:installer-sandbox" },
+            { step: 3, host: REQUIRED_WINDOWS_HOST, command: "Open the generated installer-test.wsb in Windows Sandbox. Leave virtual GPU disabled. Approve the User Account Control prompt." },
+            { step: 4, host: REQUIRED_WINDOWS_HOST, command: hardwareGpu.command },
             { step: 5, host: "any", command: `npm run check:installer-evidence -- --guest ${quotedGuest} --gpu ${quoteCommandArg(gpuResult)}` }
         ],
         evidenceFiles: [
             {
                 file: "result.json",
-                pass: 'status "passed"; completedPhases lists every extended phase in order; hardwareGpuValidation "not-certified-by-software-sandbox"; virtualGpu "disabled"',
-                fail: 'status "failed", a missing or reordered phase, a hardware-certification claim, or a missing smoke log'
+                pass: 'status "passed"; completedPhases lists every extended phase in order; installerSha256 is 64 hex characters; hardwareGpuValidation "not-certified-by-software-sandbox"; virtualGpu "disabled"; each smoke stdout log contains "smoke passed"',
+                fail: 'status "failed", a missing or reordered phase, a missing installer hash, a hardware-certification claim, or a smoke stdout log that does not contain "smoke passed"'
             },
             {
                 file: "hardware-gpu.json",
-                pass: "evidenceKind host-hardware-gpu, sandbox false, drawOk true, and a hardware classification recomputed from the renderer string",
-                fail: "software renderer, lost WebGL context, sandbox true, or certifiesHardware false. Exit 2 from validate:hardware-gpu is this failure. Exit 1 is a timeout or crash."
+                pass: "evidenceKind host-hardware-gpu, sandbox false, virtualGpu not-used, drawOk true, hostname and recordedAt from the host draw, and a hardware classification recomputed from the renderer string. validate:hardware-gpu exits 0 only after that file is re-read and accepted.",
+                fail: "software renderer, lost WebGL context, sandbox true, virtualGpu other than not-used, or certifiesHardware false. Exit 2 from validate:hardware-gpu means the file was written and does not certify hardware. Exit 1 means no evidence file (missing --out, timeout, crash, or a certifying verdict the writer refused)."
             }
         ],
         smokeLogs: expectedGuestSmokeLogs(),
-        manualGate: "RELEASE-001 stays open until a Windows host records both files and check:installer-evidence exits 0. Exit 2 means no evidence files were supplied. That exit is not a pass.",
-        guestWriter: "The guest writes result.json with the staged Node writer. It sets status to passed only when that file already satisfies the guest half of the checker, including every smoke log. That rewrite does not sample a GPU and does not close RELEASE-001."
+        filesToProduce: [
+            "result.json in the staging results folder, written by the Sandbox guest through the staged Node writer, with status passed",
+            'one stdout and stderr log per smoke phase beside result.json; each stdout log contains "smoke passed"',
+            `hardware-gpu.json beside result.json, written by the step 4 command on ${REQUIRED_WINDOWS_HOST} outside Sandbox. The hostname field should read ${REQUIRED_WINDOWS_HOST}.`
+        ],
+        manualGate: `RELEASE-001 stays open until ${REQUIRED_WINDOWS_HOST} records both files and check:installer-evidence exits 0. Exit 2 means no evidence files were supplied. That exit is not a pass. Do not hand-write result.json or hardware-gpu.json.`,
+        guestWriter: "The guest writes result.json with the staged Node writer. It sets status to passed only when that file already satisfies the guest half of the checker, including the current installer SHA-256 and every smoke log. A rejected pass removes a previous status passed file. That rewrite does not sample a GPU and does not close RELEASE-001."
     };
 }
 
@@ -137,6 +168,8 @@ function operatorText(plan) {
         "This file is not a Windows Sandbox pass and not a hardware-GPU certification.",
         "",
         `Gate: ${plan.gate} (${plan.status})`,
+        `Required Windows host: ${plan.requiredHost}`,
+        "Run the commands on that host. This plan does not record a pass.",
         "Virtual GPU: disabled",
         "Publisher metadata: omitted",
         "Signing: omitted",
@@ -150,6 +183,8 @@ function operatorText(plan) {
         lines.push(`  Pass: ${file.pass}`);
         lines.push(`  Fail: ${file.fail}`);
     }
+    lines.push("", "Files that host must produce:");
+    for (const file of plan.filesToProduce) lines.push(`- ${file}`);
     lines.push("", "Smoke logs that must sit beside result.json:");
     for (const name of plan.smokeLogs) lines.push(`- ${name}`);
     lines.push(
@@ -242,11 +277,11 @@ function fieldsToGuestResult(text) {
         completedPhases: [],
         steps: [],
         error: null,
-        syntheticBaseline: false,
-        historicalReleaseInstaller: false,
+        syntheticBaseline: null,
+        historicalReleaseInstaller: null,
         hardwareGpuValidation: null,
-        publisherMetadata: false,
-        signing: false
+        publisherMetadata: null,
+        signing: null
     };
     const booleans = new Set(["syntheticBaseline", "historicalReleaseInstaller", "publisherMetadata", "signing"]);
     const strings = new Set(["status", "evidenceKind", "virtualGpu", "hardwareGpuValidation", "installerSha256"]);
@@ -292,6 +327,15 @@ function assertHarnessContract(files = {}) {
     }
     if (!guestScript.includes("normalize-guest-result.js")) failures.push("Guest script must write result.json through the staged Node writer.");
     if (!guestScript.includes("--require-acceptable")) failures.push("Guest script must refuse status passed unless the checker would accept the guest file.");
+    if (!guestScript.includes("Guest evidence writer exited 0 without status passed")) {
+        failures.push("Guest script must reject a writer exit 0 that did not leave status passed.");
+    }
+    if (!guestScript.includes("C:\\FogworksInput\\scripts\\validate-hardware-gpu.js")) {
+        failures.push("Guest script must find the staged hardware-GPU classifier. The guest writer loads it and must not run it.");
+    }
+    if (/hardware-gpu\.json/.test(guestScript) || /validate:hardware-gpu/.test(guestScript)) {
+        failures.push("Guest script must not write hardware-gpu.json or run validate:hardware-gpu.");
+    }
     if (!guestScript.includes("SelectionItemPattern") || !guestScript.includes("InvokePattern")) {
         failures.push("Assisted installs must click through UI Automation invoke or selection before a raw button message.");
     }
@@ -353,7 +397,7 @@ function runInstallerEvidenceCheck(argv) {
                 contractOk: true,
                 guestEvidence: "not-supplied",
                 hardwareGpuEvidence: "not-supplied",
-                note: "No evidence files were supplied. Exit 2 is the open manual gate, not a Windows Sandbox pass."
+                note: `No evidence files were supplied. Exit 2 is the open manual gate, not a Windows Sandbox pass. Produce both files on ${REQUIRED_WINDOWS_HOST}, then pass them to this checker.`
             }
         };
     }
@@ -387,16 +431,17 @@ function runInstallerEvidenceCheck(argv) {
             evidenceAcceptable: acceptable,
             guestEvidence: guestEval ? (guestEval.acceptable ? "acceptable" : "rejected") : "unreadable",
             hardwareGpuEvidence: gpuEval ? (gpuEval.acceptable ? "acceptable" : "rejected") : "unreadable",
+            observedHostname: gpuEval ? gpuEval.hostname : "",
             failures,
             note: acceptable
-                ? "Both files match the extended lifecycle contract. RELEASE-001 stays open until a person reviews those files and updates the backlog. This command did not launch Windows Sandbox or draw on a GPU."
+                ? `Both files match the extended lifecycle contract. RELEASE-001 stays open until a person reviews those files, confirms hardware-gpu.json hostname is ${REQUIRED_WINDOWS_HOST}, and updates the backlog. This command did not launch Windows Sandbox or draw on a GPU.`
                 : "Evidence rejected. RELEASE-001 stays open."
         })
     };
 }
 
 module.exports = {
-    GUEST_EVIDENCE_KIND, GUEST_HARDWARE_CLAIM, HOST_GPU_EVIDENCE_KIND,
+    GUEST_EVIDENCE_KIND, GUEST_HARDWARE_CLAIM, HOST_GPU_EVIDENCE_KIND, REQUIRED_WINDOWS_HOST, SMOKE_PASS_MARK,
     expectedGuestSmokeLogs, readJsonFile, evaluateGuestLifecycleResult, evaluateHardwareGpuEvidence,
     guestSmokeInvocations, smokeLogNamesFromInvocations, guestSmokeContractFailures,
     fieldsToGuestResult, writeGuestResultFile,

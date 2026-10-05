@@ -2,6 +2,7 @@
  * @module validate-hardware-gpu
  * @description Classifies a WebGL renderer and, when launched under Electron, draws one
  * frame so a host can record hardware-GPU evidence outside the software-rendered installer sandbox.
+ * Exit 0 only after --out hardware-gpu.json is re-read and the host half of the checker accepts it.
  */
 const fs = require("node:fs");
 const os = require("node:os");
@@ -52,16 +53,82 @@ function hardwareGpuVerdict(renderer, options = {}) {
     };
 }
 
+function certifyingVerdictError(verdict) {
+    if (!verdict || verdict.certifiesHardware !== true) return null;
+    const recomputed = hardwareGpuVerdict(verdict.renderer, { drawOk: verdict.drawOk === true });
+    if (!recomputed.certifiesHardware) return "Refusing to write hardware-gpu.json: the renderer string does not certify hardware.";
+    if (verdict.evidenceKind !== recomputed.evidenceKind) return "Refusing to write hardware-gpu.json: evidenceKind is not host-hardware-gpu.";
+    if (verdict.sandbox !== false) return "Refusing to write hardware-gpu.json: sandbox must be false.";
+    if (verdict.virtualGpu !== "not-used") return "Refusing to write hardware-gpu.json: virtualGpu must be not-used.";
+    if (verdict.classification !== recomputed.classification) return "Refusing to write hardware-gpu.json: classification does not match the renderer string.";
+    if (verdict.drawOk !== true) return "Refusing to write hardware-gpu.json: drawOk must be true.";
+    if (typeof verdict.hostname !== "string" || !verdict.hostname.trim()) return "Refusing to write hardware-gpu.json: hostname is required.";
+    if (typeof verdict.recordedAt !== "string" || Number.isNaN(Date.parse(verdict.recordedAt))) {
+        return "Refusing to write hardware-gpu.json: recordedAt must be an ISO timestamp.";
+    }
+    return null;
+}
+
 function writeHardwareGpuFile(file, verdict) {
+    const problem = certifyingVerdictError(verdict);
+    if (problem) throw new Error(problem);
     const target = path.resolve(file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, `${JSON.stringify(verdict, null, 2)}\n`);
     return target;
 }
 
-module.exports = { classifyGpuRenderer, hardwareGpuVerdict, writeHardwareGpuFile, SOFTWARE_RENDERER_PATTERNS };
+function unlinkQuiet(file) {
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+}
+
+function finishHardwareGpuEvidence(verdict, outFile, deps) {
+    if (!outFile || typeof outFile !== "string") {
+        return { exitCode: 1, wrote: false, errors: ["Pass --out hardware-gpu.json. A printed verdict is not evidence."] };
+    }
+    const problem = certifyingVerdictError(verdict);
+    if (problem) return { exitCode: 1, wrote: false, errors: [problem] };
+    let target;
+    try {
+        target = writeHardwareGpuFile(outFile, verdict);
+    } catch (error) {
+        return { exitCode: 1, wrote: false, errors: [error.message] };
+    }
+    let record;
+    try {
+        record = deps.readJsonFile(target);
+    } catch (error) {
+        if (verdict.certifiesHardware === true) unlinkQuiet(target);
+        return {
+            exitCode: 1,
+            wrote: verdict.certifiesHardware !== true,
+            errors: [`Could not re-read hardware GPU evidence: ${error.message}`]
+        };
+    }
+    let evaluation;
+    try {
+        evaluation = deps.evaluate(record);
+    } catch (error) {
+        if (verdict.certifiesHardware === true) unlinkQuiet(target);
+        return { exitCode: 1, wrote: verdict.certifiesHardware !== true, errors: [error.message] };
+    }
+    if (!evaluation.acceptable) {
+        if (verdict.certifiesHardware === true) {
+            unlinkQuiet(target);
+            return { exitCode: 1, wrote: false, errors: evaluation.failures };
+        }
+        return { exitCode: 2, wrote: true, errors: evaluation.failures, record };
+    }
+    return { exitCode: 0, wrote: true, errors: [], record };
+}
+
+module.exports = {
+    classifyGpuRenderer, hardwareGpuVerdict, certifyingVerdictError,
+    writeHardwareGpuFile, finishHardwareGpuEvidence, SOFTWARE_RENDERER_PATTERNS
+};
 
 if (require.main === module) {
+    const { evaluateHardwareGpuEvidence, readJsonFile } = require("./installerEvidence");
     const { app, BrowserWindow } = require("electron");
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-hardware-gpu-"));
     app.setPath("userData", profile);
@@ -83,18 +150,23 @@ if (require.main === module) {
                 const vendor = debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
                 return { drawOk: gl.getError() === gl.NO_ERROR, renderer: String(renderer || ''), vendor: String(vendor || '') };
             })()`);
+            const outAt = process.argv.indexOf("--out");
+            const outPath = outAt >= 0 ? process.argv[outAt + 1] : "";
             const verdict = {
                 ...hardwareGpuVerdict(sample.renderer, { drawOk: sample.drawOk }),
                 vendor: sample.vendor,
+                hostname: os.hostname(),
                 recordedAt: new Date().toISOString()
             };
-            const outAt = process.argv.indexOf("--out");
-            const body = JSON.stringify(verdict, null, 2);
-            if (outAt >= 0 && process.argv[outAt + 1]) writeHardwareGpuFile(process.argv[outAt + 1], verdict);
-            console.log(body);
+            const outcome = finishHardwareGpuEvidence(verdict, outPath, {
+                readJsonFile,
+                evaluate: evaluateHardwareGpuEvidence
+            });
+            console.log(JSON.stringify(outcome.record || verdict, null, 2));
+            if (outcome.errors.length) console.error(outcome.errors.join("\n"));
             clearTimeout(timeout);
             win.destroy();
-            app.exit(verdict.certifiesHardware ? 0 : 2);
+            app.exit(outcome.exitCode);
         } catch (error) {
             console.error(error);
             clearTimeout(timeout);

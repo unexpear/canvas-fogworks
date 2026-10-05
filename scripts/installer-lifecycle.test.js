@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { releaseIdentityViolations } = require("./check-package");
 const { assertMigratedHistoricalProject, historicalProjectDocument } = require("../src/electron/historicalMigration");
-const { classifyGpuRenderer, hardwareGpuVerdict } = require("./validate-hardware-gpu");
+const { classifyGpuRenderer, finishHardwareGpuEvidence, hardwareGpuVerdict, writeHardwareGpuFile } = require("./validate-hardware-gpu");
 const {
     guestLifecyclePhases, hostHardwareGpuPhase, readSchemaVersion, sandboxConfigurationXml,
     silentInstallArguments, silentUninstallArguments, defaultInputs, prepareInstallerSandbox
@@ -16,7 +16,6 @@ const {
     expectedGuestSmokeLogs, fieldsToGuestResult, readJsonFile, runInstallerEvidenceCheck, writeInstallerEvidencePlan
 } = require("./installerEvidence");
 const { runNormalizeGuestResult } = require("./normalize-guest-result");
-const { writeHardwareGpuFile } = require("./validate-hardware-gpu");
 
 const guestScript = fs.readFileSync(path.join(__dirname, "test-installer-sandbox.ps1"), "utf8");
 
@@ -119,7 +118,10 @@ test("guest phases cover migration, assisted GUI and per-machine install, and th
     assert.match(guestScript, /--require-acceptable/);
     assert.match(guestScript, /SelectionItemPattern/);
     assert.match(guestScript, /This file is not a pass/);
-    assert.doesNotMatch(guestScript, /validate-hardware-gpu/);
+    assert.match(guestScript, /scripts\\validate-hardware-gpu\.js/);
+    assert.match(guestScript, /Guest evidence writer exited 0 without status passed/);
+    assert.doesNotMatch(guestScript, /validate:hardware-gpu/);
+    assert.doesNotMatch(guestScript, /hardware-gpu\.json/);
     const host = hostHardwareGpuPhase();
     assert.equal(host.runsInSandbox, false);
     assert.match(host.command, /validate:hardware-gpu -- --out /);
@@ -208,16 +210,24 @@ function passingGuestResult() {
         historicalReleaseInstaller: false,
         publisherMetadata: false,
         signing: false,
+        installerSha256: "A".repeat(64),
         error: null
     };
 }
 
 function passingGpuRecord() {
-    return hardwareGpuVerdict("ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)", { drawOk: true });
+    return {
+        ...hardwareGpuVerdict("ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)", { drawOk: true }),
+        hostname: "test-host",
+        recordedAt: "2026-10-05T17:00:00.000Z"
+    };
 }
 
 function writeSmokeLogs(directory) {
-    for (const name of expectedGuestSmokeLogs()) fs.writeFileSync(path.join(directory, name), "");
+    for (const name of expectedGuestSmokeLogs()) {
+        const body = name.endsWith(".stdout.log") ? "Startup smoke passed (packaged app).\n" : "";
+        fs.writeFileSync(path.join(directory, name), body);
+    }
 }
 
 test("harness contract matches the guest script and keeps virtual GPU disabled", () => {
@@ -256,6 +266,11 @@ test("hardware evidence is recomputed from the renderer string", () => {
     assert.match(rejected.failures.join("\n"), /does not certify hardware/);
     const sandbox = { ...passingGpuRecord(), sandbox: true };
     assert.match(evaluateHardwareGpuEvidence(sandbox).failures.join("\n"), /sandbox must be false/);
+    const guestClaim = { ...passingGpuRecord(), virtualGpu: "disabled" };
+    assert.match(evaluateHardwareGpuEvidence(guestClaim).failures.join("\n"), /not-used/);
+    const undated = { ...passingGpuRecord() };
+    delete undated.recordedAt;
+    assert.match(evaluateHardwareGpuEvidence(undated).failures.join("\n"), /recordedAt/);
 });
 
 test("evidence checker leaves RELEASE-001 open when no Sandbox files are supplied", t => {
@@ -278,6 +293,11 @@ test("evidence checker leaves RELEASE-001 open when no Sandbox files are supplie
     assert.match(operator, /not evidence/);
     assert.match(operator, /User Account Control/);
     assert.match(operator, /Close Windows Sandbox after result\.json shows status passed/);
+    assert.match(operator, /DESKTOP-2SB8IKI/);
+    assert.match(operator, /Do not hand-write result\.json or hardware-gpu\.json/);
+    assert.match(operator, /smoke passed/);
+    assert.equal(dryRun.report.requiredHost, "DESKTOP-2SB8IKI");
+    assert.equal(dryRun.report.hardwareGpuPassRecorded, false);
     const withSpace = writeInstallerEvidencePlan(temporary, { resultsDir: path.join(temporary, "results folder") });
     assert.match(withSpace.checkerCommand, /--guest "[^"]*results folder[/\\]result\.json"/);
     const bom = path.join(temporary, "bom.json");
@@ -317,7 +337,11 @@ test("check-installer-evidence without files exits 2", () => {
     assert.equal(report.executedOnThisHost, false);
     assert.equal(report.guestEvidence, "not-supplied");
     assert.equal(report.hardwareGpuEvidence, "not-supplied");
+    assert.equal(report.requiredHost, "DESKTOP-2SB8IKI");
+    assert.equal(report.sandboxPassRecorded, false);
+    assert.equal(report.hardwareGpuPassRecorded, false);
     assert.match(report.note, /not a Windows Sandbox pass/);
+    assert.match(report.note, /DESKTOP-2SB8IKI/);
 });
 
 function evidenceField(name, value) {
@@ -334,6 +358,7 @@ function passingGuestFields() {
         "historicalReleaseInstaller false",
         "publisherMetadata false",
         "signing false",
+        evidenceField("installerSha256", "A".repeat(64)),
         ...guestLifecyclePhases().map(phase => evidenceField("completed", phase.id)),
         evidenceField("step", "done \"quoted\"\nand wrapped"),
         "error ~",
@@ -376,6 +401,25 @@ test("guest field writer emits checker-accepted JSON and does not publish a reje
     assert.equal(rejected.wrote, false);
     assert.equal(fs.existsSync(rejectedOut), false);
     assert.match(rejected.errors.join("\n"), /Missing completed phases|completedPhases/);
+    const stale = path.join(temporary, "stale.json");
+    fs.writeFileSync(stale, JSON.stringify({ status: "passed", evidenceKind: "forged" }));
+    const removed = runNormalizeGuestResult(["--fields", onePhase, "--out", stale]);
+    assert.equal(removed.exitCode, 1);
+    assert.equal(removed.wrote, false);
+    assert.equal(fs.existsSync(stale), false);
+    const omittedSigning = path.join(temporary, "unsigned-fields.txt");
+    fs.writeFileSync(omittedSigning, passingGuestFields().replace("signing false\n", ""));
+    const omittedOut = path.join(temporary, "omitted.json");
+    const omitted = runNormalizeGuestResult(["--fields", omittedSigning, "--out", omittedOut]);
+    assert.equal(omitted.exitCode, 1);
+    assert.equal(omitted.wrote, false);
+    assert.equal(fs.existsSync(omittedOut), false);
+    assert.match(omitted.errors.join("\n"), /signing/);
+    const withoutFlag = path.join(temporary, "without-flag.json");
+    const unguarded = runNormalizeGuestResult(["--fields", fields, "--out", withoutFlag]);
+    assert.equal(unguarded.exitCode, 0, unguarded.errors.join("\n"));
+    assert.equal(unguarded.wrote, true);
+    assert.equal(readJsonFile(withoutFlag).status, "passed");
 });
 
 test("loading the guest evidence writer does not load the archive checker", () => {
@@ -393,4 +437,35 @@ test("hardware GPU evidence file is created under a new directory", t => {
     const target = path.join(temporary, "nested", "hardware-gpu.json");
     writeHardwareGpuFile(target, passingGpuRecord());
     assert.equal(readJsonFile(target).evidenceKind, "host-hardware-gpu");
+});
+
+test("hardware GPU writer exits 0 only after the written file passes the host half", t => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-gpu-finish-"));
+    t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+    const deps = { readJsonFile, evaluate: evaluateHardwareGpuEvidence };
+    const missing = finishHardwareGpuEvidence(passingGpuRecord(), "", deps);
+    assert.equal(missing.exitCode, 1);
+    assert.equal(missing.wrote, false);
+    const target = path.join(temporary, "hardware-gpu.json");
+    const accepted = finishHardwareGpuEvidence(passingGpuRecord(), target, deps);
+    assert.equal(accepted.exitCode, 0, accepted.errors.join("\n"));
+    assert.equal(accepted.wrote, true);
+    assert.equal(evaluateHardwareGpuEvidence(readJsonFile(target)).acceptable, true);
+    const software = hardwareGpuVerdict("Google SwiftShader", { drawOk: true });
+    const softwareFile = path.join(temporary, "software.json");
+    const negative = finishHardwareGpuEvidence(software, softwareFile, deps);
+    assert.equal(negative.exitCode, 2);
+    assert.equal(negative.wrote, true);
+    assert.equal(fs.existsSync(softwareFile), true);
+    assert.equal(evaluateHardwareGpuEvidence(readJsonFile(softwareFile)).acceptable, false);
+    const forged = path.join(temporary, "forged.json");
+    const forgedVerdict = { ...passingGpuRecord(), renderer: "Google SwiftShader", certifiesHardware: true, classification: "hardware" };
+    assert.throws(() => writeHardwareGpuFile(forged, forgedVerdict), /does not certify hardware/);
+    assert.equal(fs.existsSync(forged), false);
+    const weak = path.join(temporary, "weak-stdout");
+    fs.mkdirSync(weak);
+    writeSmokeLogs(weak);
+    const stdout = expectedGuestSmokeLogs().find(name => name.endsWith(".stdout.log"));
+    fs.writeFileSync(path.join(weak, stdout), "still running\n");
+    assert.match(evaluateGuestLifecycleResult(passingGuestResult(), { resultsDir: weak }).failures.join("\n"), /smoke passed/);
 });
