@@ -1,6 +1,7 @@
 /**
  * @module preview-hardware-admission
  * @description Prints a SCALE-001 physical-GPU admission preview for a stored host sample.
+ * The summary also reports that the frozen Iris Xe GPU entry is not a refileable sample.
  * Software GL stays ineligible. The command leaves the frozen budgets and CI gate unchanged.
  */
 const fs = require("fs");
