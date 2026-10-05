@@ -1,6 +1,7 @@
 # API Contracts
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
+<!-- re-read 2026-10-04: schema 90 adds optional document saveMigrations and SetSaveMigrationsAction. Existing signatures are unchanged. -->
 <!-- re-read 2026-08-14 after the runtime's first slice: accurate, and it gained a surface —
      `core/runtime/World`, below. Nothing existing changed shape; the runtime stamps a document the
      way `applyFrame` does and every signature here reads it unchanged. -->
@@ -15,7 +16,7 @@
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
 
-> 🔒 Frozen contract · schema v89 (app v0.0.5) · current through gameplay rules, native mesh playback and production workflow seams. The public surface each layer depends on.
+> 🔒 Frozen contract · schema v90 (app v0.0.5) · current through gameplay rules, native mesh playback and production workflow seams. The public surface each layer depends on.
 
 `ProjectSession` owns acknowledged saves and recovery; `stepGameplay` is shared by the editor and offline 2D player. `readGltfMotion`/`sampleGltfMotion` handle bounded imported TRS/skin playback, and `contact3D` supplies oriented collision contacts. Current scope and limits: [Production workflows](PRODUCTION-WORK.md).
 

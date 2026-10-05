@@ -18,6 +18,7 @@ const {
 } = require("../app/RecoveryRestore");
 const { embedProjectImages } = require("./projectImages");
 const { gameDocumentTargets, gameHtml } = require("../core/export/GameExport");
+const { saveMigrationsFromDocument } = require("../runtime/saveMigrationTable");
 const { collectGamePackage, fontPayloadsFromJson, game3DHtml, gameProvenance } = require("./GamePackageExport");
 const fs = require("fs");
 const zlib = require("zlib");
@@ -976,7 +977,10 @@ ipcMain.handle("export-game", async (_event, folder, content, sourceProjectPath)
     }
     const entry = await visit(sourceProjectPath ? fs.realpathSync.native(sourceProjectPath) : "entry", content);
     const bundle = await fs.promises.readFile(path.join(__dirname, "..", "app", "player.js"));
-    await atomicWrite(destination, gameHtml({ entry, levels }, bundle.toString("base64")));
+    const migrations = saveMigrationsFromDocument(content);
+    const game = { entry, levels };
+    if (migrations.length) game.saveMigrations = migrations;
+    await atomicWrite(destination, gameHtml(game, bundle.toString("base64")));
     return destination;
 });
 
@@ -984,7 +988,10 @@ ipcMain.handle("export-game-3d", async (event, folder, content, sourceProjectPat
     if (event.sender !== mainWindow?.webContents) throw new Error("Unapproved game export sender.");
     if (!approvedExportFolders.has(folder)) throw new Error("Choose an export folder first.");
     if (!sourceProjectPath || !approvedSavePaths.has(sourceProjectPath)) throw new Error("Save the project before exporting a 3D game.");
-    const serialized = await collectGamePackage(sourceProjectPath, content, { fontPayloads: fontPayloadsFromJson(fonts) });
+    const migrations = saveMigrationsFromDocument(content);
+    const sources = { fontPayloads: fontPayloadsFromJson(fonts) };
+    if (migrations.length) sources.saveMigrations = migrations;
+    const serialized = await collectGamePackage(sourceProjectPath, content, sources);
     const bundle = await fs.promises.readFile(path.join(__dirname, "..", "app", "player3d.js"));
     const provenance = gameProvenance(serialized, { appVersion: pkg.version, sourceRevision: null });
     const destination = resolveInsideFolder(folder, "game-3d.html");

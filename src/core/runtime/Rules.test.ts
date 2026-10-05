@@ -552,9 +552,15 @@ describe("pipes — DOWN inside a warp region moves you where the author pointed
         // …AND THE APP GIVES THE RULES THE BUTTONS, and cuts the camera on a warp — without
         // either, pipes exist and cannot fire, or fire and swoosh across the level.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const input = readFileSync(resolve(__dirname, "InputSettings.ts"), "utf8") + "\n"
+            + readFileSync(resolve(__dirname, "InputActions.ts"), "utf8");
         expect(app).toMatch(/bounds: runBoundsRef\.current, input: es\.input/);
         expect(app).toMatch(/c\.kind === "teleport" && c\.bodyId === es\.controlled/);
-        expect(app).toMatch(/if \(key === "ArrowDown" \|\| key === "s" \|\| key === "S"\) return "down";/);
+        // Down is a named binding now. S and ArrowDown still hold "back", and the shell feeds
+        // that held state to the rules as input.down.
+        expect(app).toMatch(/es\.input = platformerInput\(inputActionsRef\.current!\)/);
+        expect(input).toMatch(/down: actions\.held\("back"\)/);
+        expect(input).toMatch(/back: \["KeyS", "ArrowDown"\]/);
     });
 });
 

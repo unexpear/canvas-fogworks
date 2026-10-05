@@ -1,6 +1,7 @@
 # Coding Standards
 
 <!-- describes: src/core/document/Document.ts -->
+<!-- re-read 2026-10-04: schema 90 is the optional saveMigrations field. The freeze rule is unchanged. -->
 <!-- re-read 2026-08-11 after schema 66: accurate, and it earned its keep. `copyTerrainMaterial`
      exists because of the rule stated here — a record rebuilt field by field drops the field added
      last, which this project has paid for three times. One copier, four callers. -->
@@ -11,7 +12,7 @@
      one validator shared by the load and edit paths, and a header that says WHY the value is
      text rather than what it is. -->
 
-> 🔒 Frozen contract · schema v89 (app v0.0.5) · current through gameplay rules, native mesh playback and animation crossfades. Conventions + the hard rules that protect the invariants.
+> 🔒 Frozen contract · schema v90 (app v0.0.5) · current through gameplay rules, native mesh playback and animation crossfades. Conventions + the hard rules that protect the invariants.
 
 Persisted rule/playback edits use Actions. Runtime commands, audio voices, sampled mesh arrays and save/recovery bookkeeping must not write document history. New distribution fixtures must be original or explicitly redistributable; ignored third-party reference packs are not fixtures for distribution.
 

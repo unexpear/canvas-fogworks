@@ -1,6 +1,7 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-10-04: schema 90 adds optional document saveMigrations. Older documents stay without a list. -->
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: persisted schema and compatibility
      identifiers were unchanged; only product-facing prose changed at schema 76. -->
 <!-- re-read 2026-08-14 after the dropHidden fix: accurate, and NO field moved. `hidden` (line 94)
@@ -19,7 +20,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v89 (app v0.0.5). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v90 (app v0.0.5). Types are in `src/core/document/`.
 
 Schema 86 adds optional `Node.spatial3d.blockout`: editable box/wall/ramp dimensions, stair
 count, or room thickness/ceiling. Geometry buffers are derived, not persisted. Dimensions are
@@ -43,6 +44,12 @@ Schema 89 adds optional `animation.transitions[].fade` and `spatial3d.animation.
 greater than 0 and at most 1. Absent still cuts to the next clip immediately. A fade blends the
 outgoing and incoming timeline clips, or the previous and next glTF clips, and then finishes.
 Migration 88→89 does not invent fade durations.
+
+Schema 90 adds optional document `saveMigrations`: at most eight `{ fromGameId, versions }` records.
+`fromGameId` is a previous package-content SHA-256. `versions` lists player-progress formats 1–6
+that this document may adopt from that hash. Absent or empty means no cross-build adoption.
+The inspector writes the list through `SetSaveMigrationsAction`. Export copies the entry
+document's list onto the package. Migration 89→90 does not invent a list.
 
 Schema 78 adds `Entity.rules`, `rulePolicy`, `gravity3d`, `restitution3d`, and `Spatial3D.animation`. Migration 77→78 preserves absent fields. Rules hold typed events, conditions and runtime commands; sound commands embed bounded audio data URLs. Mesh playback stores clip indices, optional secondary clip/blend, speed and loop—not joint buffers or clocks. See [Production workflows](PRODUCTION-WORK.md).
 

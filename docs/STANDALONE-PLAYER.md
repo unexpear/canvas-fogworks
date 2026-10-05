@@ -1,9 +1,7 @@
 # Standalone 3D export and Windows player
 
 <!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/playerExeEvidence.js, scripts/check-player-exe-evidence.js, scripts/packageSignature.js, scripts/check-package-signature.js, scripts/check-world-partition.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
-<!-- re-read 2026-10-04: provenance stamps null publisher, signature and certificate. check:package-signature
-     fail-closes when any of those are missing. --world-partition attaches a caller-supplied cell table
-     after --stream. The packaged player does not page those cells from the camera. F1 stays open. -->
+<!-- re-read 2026-10-04: the editor can author save migrations on the document. Provenance stamps null publisher, signature and certificate. check:package-signature fail-closes when any of those are missing. --world-partition attaches a caller-supplied cell table after --stream. The packaged player does not page those cells from the camera. Package version 1 and the EXE evidence gate are unchanged. F1 stays open. -->
 <!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes.
      --stream writes buffer/image/HDR chunks beside the player. Models, fonts, embedded cues and
      screen-space text stay on their existing paths. check:player-exe-evidence scores a clean-machine
@@ -189,7 +187,7 @@ focus: in-range cells load, a cancelled read is dropped, the anchor stays when a
 and residency cannot exceed 32 MiB. The packaged player does not pass the camera into that session.
 
 Still open: a recorded clean Windows-machine pass of the unpacked EXE; prefab campaign snapshots,
-portable save files, multiple slots and an editor control for save migrations; long-session/GPU/device-loss evidence;
+portable save files and multiple slots; long-session/GPU/device-loss evidence;
 a real release certificate and publisher, camera-driven world-partition paging, trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.
