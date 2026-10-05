@@ -2755,7 +2755,8 @@ describe("Components: instance overrides", () => {
         // The failure mode this guards: a missed call site dispatches an action whose target
         // isn't in the stored document, `dispatchAction` returns success:false, and the control
         // silently does nothing. The App inspector was exactly such a site.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/ImportPlacement.ts"), "utf8");
         expect(src).not.toMatch(/new UpdateNodeGeometryAction\(/); // inspector routes via geometryActionFor
         expect(src).not.toMatch(/new UpdateNodeStyleAction\(/);    // …and styleActionFor
         // THE ONE CASE THE ROUTER CANNOT SERVE is a node created in the same transaction: it exists
@@ -9567,7 +9568,8 @@ describe("Variants: a set is just the masters that name it", () => {
     });
 
     test("the UI can TAG a master and SWITCH an instance — either alone is useless", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/NodeInspectorSections.tsx"), "utf8");
         expect(src).toMatch(/<VariantSection/);
         expect(src).toMatch(/new SetVariantAction\(/);            // tag
         expect(src).toMatch(/new SetInstanceVariantAction\(/);    // switch
@@ -9937,7 +9939,8 @@ describe("Slots: content an instance supplies", () => {
     });
 
     test("the UI can NAME a slot and FILL one — either alone is useless", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/NodeInspectorSections.tsx"), "utf8");
         expect(src).toMatch(/<SlotSection/);
         expect(src).toMatch(/e\.target\.checked \? "content" : null/);  // become a slot
         expect(src).toMatch(/new SetSlotAction\(dispatcher\.getDocument\(\), node\.id, v\)/); // …and rename it
@@ -10231,7 +10234,8 @@ describe("States: a document-level selection, like the theme", () => {
     });
 
     test("the UI can DEFINE a state and SHOW one — either alone is useless", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/NodeInspectorSections.tsx"), "utf8");
         expect(src).toMatch(/<StatesSection/);
         // TWO call sites use the same constructor (re-capture and capture-new), so the
         // audit must name something unique to each or deleting one still passes.
@@ -10374,7 +10378,8 @@ describe("Layers: hidden and locked", () => {
     });
 
     test("the panel offers both toggles, and shows an INHERITED flag without pretending it is set", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/LayersPanel.tsx"), "utf8");
         expect(src).toMatch(/onFlag\(\{ hidden: !node\.hidden \}\)/);
         expect(src).toMatch(/onFlag\(\{ locked: !node\.locked \}\)/);
         expect(src).toMatch(/inheritedHidden \? "default" : "pointer"/);   // an inherited flag is not clickable here
@@ -10473,11 +10478,13 @@ describe("resolveLayerDrop", () => {
     });
 
     test("the panel offers drag AND rename, and shows only drops it would take", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/LayersPanel.tsx"), "utf8");
         expect(src).toMatch(/draggable=\{!renaming\}/);
-        expect(src).toMatch(/new ReparentNodeAction\(dispatcher\.getDocument\(\), layerDrag\.id, drop\.parent, drop\.index\)/);
+        expect(src).toMatch(/onReparent\(dragged, drop\.parent, drop\.index\)/);
+        expect(src).toMatch(/new ReparentNodeAction\(dispatcher\.getDocument\(\), id, parent, index\)/);
         // The indicator is gated on the SAME resolver the drop uses, so the two cannot disagree.
-        expect(src).toMatch(/const ok = layerDrag\.id && layerDrag\.id !== id[\s\S]{0,160}resolveLayerDrop\(/);
+        expect(src).toMatch(/const dragged = layerDrag\.id;\s*const ok = dragged && dragged !== id[\s\S]{0,200}resolveLayerDrop\(/);
         expect(src).toMatch(/onDoubleClick=\{e => \{ e\.stopPropagation\(\); setRenaming\(true\); \}\}/);
         expect(src).toMatch(/contentActionFor\(dispatcher\.getDocument\(\), id, \{ name \}\)/);
     });
@@ -10591,8 +10598,9 @@ describe("Opacity: a group's fade reaches its contents", () => {
         // Counting the call site: `styleActionFor` appears many times in App.tsx, so matching the
         // bare name would pass with the layer control deleted — the audit fault from the slots
         // and states slices, twice recorded and twice repeated.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
-        expect(src).toMatch(/onOpacity=\{opacity => \{/);
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/LayersPanel.tsx"), "utf8");
+        expect(src).toMatch(/onOpacity=\{opacity => onOpacity\(id, opacity\)\}/);
         expect(src).toMatch(/styleActionFor\(dispatcher\.getDocument\(\), id, \{ opacity \}\)/);
         expect(src).toMatch(/onOpacity\(Math\.min\(1, Math\.max\(0, pct \/ 100\)\)\)/);
         // …and it refuses a half-typed value rather than snapping the node to invisible.
@@ -10702,9 +10710,11 @@ describe("filterLayers", () => {
     });
 
     test("the panel wires BOTH — searching and multi-select, each at its own call site", () => {
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/LayersPanel.tsx"), "utf8");
         expect(src).toMatch(/filterLayers\(doc, layerQuery, labelOf\)/);
-        expect(src).toMatch(/selectionForRowClick\(visibleOrder, es\.selectedNodeIds, layerAnchorRef\.current, id, mods\)/);
+        expect(src).toMatch(/selectedIds=\{es\.selectedNodeIds\}/);
+        expect(src).toMatch(/selectionForRowClick\(visibleOrder, selectedIds, layerAnchorRef\.current, id, mods\)/);
         // Filtering must IGNORE the collapsed state, or search only finds what was already open.
         expect(src).toMatch(/filter\.inactive \? collapsedLayers\.has\(id\) : false/);
         // …and a filtered-out row is skipped before it is rendered or added to the order.
@@ -12238,7 +12248,8 @@ describe("Prototype interactions and transitions", () => {
         // unreachable: `blendStates` interpolates geometry and transform, so a prototype could
         // change colour but could never move, grow or turn anything. The animation existed and
         // nothing could author an input for it.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/NodeInspectorSections.tsx"), "utf8");
         expect(src).toMatch(/function captureLook\(node: Node\): StateDefinition \{[\s\S]{0,300}geometry: \{ \.\.\.node\.geometry \}/);
         expect(src).toMatch(/\.\.\.\(node\.transform \? \{ transform: \{ \.\.\.node\.transform \} \} : \{\}\)/);
         // BOTH capture buttons (re-capture and capture-as) go through the one helper, so the
@@ -18900,11 +18911,12 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // Image reads are confined to the folder chosen in the native dialog, just like maps.
         expect(main).toMatch(/resolveConfined\(folder, folder, filePath, "an image"\)/);
 
-        // THE HANDLER HOLDS ONLY THE PLACEMENT. Everything else is `sequenceImportActions`, whose
-        // behaviour the test below actually runs. The folder dialog and frame reads live in
-        // FoldersDrawer and are driven there; this callback only places the prepared track.
-        const handler = app.slice(app.indexOf("const importSequence = useCallback"),
-            app.indexOf("const importSvg = useCallback"));
+        // THE HANDLER HOLDS ONLY THE PLACEMENT. It lives in ImportPlacement so a test can call it.
+        // Everything else is `sequenceImportActions`, whose behaviour the test below actually runs.
+        // The folder dialog and frame reads live in FoldersDrawer; this callback only places the track.
+        const placement = readFileSync(resolve(__dirname, "../../app/ImportPlacement.ts"), "utf8");
+        const handler = placement.slice(placement.indexOf("const importSequence ="),
+            placement.indexOf("const importSvg ="));
         expect(handler).toContain("sequenceImportActions(doc, {");
         expect(handler).toContain('new TransactionAction(doc, "import-sequence", actions)');
         // NOT `importTrack`, which reads `selectedNodeId` from a closure this render has not
@@ -18935,10 +18947,10 @@ describe("Mesh — bending a shape (schema 41)", () => {
     });
 
     test("a folder of frames becomes ONE node that plays, and ONE undo removes it", () => {
-        // THE ACTIONS THEMSELVES, not a description of them. The handler in App.tsx is unreachable
-        // from any harness — `window.electronAPI` is frozen and non-configurable, so the native
-        // folder dialog cannot be driven or stubbed from CDP — so everything worth asserting was
-        // moved into a function a test can call, exactly as `tileImportActions` was.
+        // THE ACTIONS THEMSELVES, not a description of them. Placement is callable from
+        // ImportPlacement.test.ts. The native folder dialog still cannot be driven from CDP —
+        // `window.electronAPI` is frozen — so the actions a placement commits stay here, where a
+        // test can call them, exactly as `tileImportActions` was.
         const seq = groupSequences(["run_0.png", "run_1.png", "run_2.png", "run_3.png"])[0];
         const track = sequenceTrack(seq, { step: 3, hrefFor: f => `data:image/png;base64,${f}` });
         const d = new ActionDispatcher(createEmptyDocument());
@@ -20377,7 +20389,8 @@ describe("Mesh — bending a shape (schema 41)", () => {
 
         // AND THE PANEL REACHES ALL THREE EDITS. A schema change nobody can touch is the state this
         // project treats as a defect, and the table was in exactly that state when it shipped.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/ImportPlacement.ts"), "utf8");
         expect(app).toMatch(/new SetTilesetsAction\(/);
         expect(app).toMatch(/data-tileset-pick="1"/);
         expect(app).toMatch(/withTilesetId\(map, e\.target\.value\)/);
@@ -30807,7 +30820,8 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // Giving them a field and no way to edit it would move the gap rather than close it: the
         // data would live in the file, survive every save, and be invisible to the person who owns
         // it. This is the door.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/NodeInspectorSections.tsx"), "utf8");
         expect(app).toMatch(/<InspectorSection title="Metadata">/);
         expect(app).toMatch(/function MetadataSection\(/);
         expect(app).toMatch(/aria-label="Add property"/);
@@ -32037,7 +32051,9 @@ describe("the document's SCREEN (schema 72) — one screenful of the game", () =
     test("a TILED IMPORT declares the map's own size, and never resizes a declared one", () => {
         // The app-side rule mirrors the background's: same transaction, and a document that already
         // declares its screen keeps it — a second map must not resize the first one's play area.
-        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8") + "\n" + readFileSync(resolve(__dirname, "../../app/FoldersDrawer.tsx"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/ImportPlacement.ts"), "utf8")
+            + "\n" + readFileSync(resolve(__dirname, "../../app/DocumentControls.tsx"), "utf8");
         expect(app).toMatch(/screen !== undefined && doc\.screen === undefined/);
         expect(app).toMatch(/width: map\.width \* map\.tileWidth/);
         // …and the control exists, so the field is authorable without an import.

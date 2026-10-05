@@ -4,7 +4,7 @@
  * inspector, and status bar.
  */
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import "./ElectronAPI";
 import { applyOpenedProject, bindProjectFileWorkflow, ProjectFileTarget } from "./ProjectFileWorkflow";
 import { ProjectSession } from "./ProjectSession";
@@ -14,11 +14,6 @@ import {
 } from "./RecoveryRestore";
 import { stepGameplay } from "../core/runtime/GameplaySession";
 import { RuntimeAudio } from "./RuntimeAudio";
-import { GameplayPanel } from "./GameplayPanel";
-import { ActorPlacementPanel } from "./ActorPlacementPanel";
-import { SetBehaviorAssetsAction } from "../core/actions/SetBehaviorAssetsAction";
-import { SetBehaviorFunctionsAction } from "../core/actions/SetBehaviorFunctionsAction";
-import {SetGameplayVariablesAction} from "../core/actions/SetGameplayVariablesAction";
 import { SetSaveMigrationsAction } from "../core/actions/SetSaveMigrationsAction";
 import { SaveMigrationsPanel } from "./SaveMigrationsPanel";
 import { BehaviorDebugPanel } from "./BehaviorDebugPanel";
@@ -32,7 +27,7 @@ import { applyAnimations, applyMotionFades, sampleClip } from "../core/runtime/A
 import { animateWorld2D } from "../core/runtime/AnimationWorld";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
-import { Node, Shadow, flatFill, UserData } from "../core/document/Node";
+import { Node, Shadow, flatFill } from "../core/document/Node";
 import { Gradient, GradientStop } from "../core/document/Gradient";
 import { resolveTypography } from "../renderer/RenderModel";
 import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
@@ -43,14 +38,10 @@ import { ContentPatch, UpdateNodeContentAction } from "../core/actions/UpdateNod
 import { resolveScene, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction } from "../core/actions/VariableActions";
 import { VariableStore } from "../core/document/Variables";
-import { TrackSize, newGridPatch, VariantKey, variantError, slotError, variantNameError } from "../core/document/Node";
-import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/VariantActions";
-import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
-import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
+import { TrackSize, newGridPatch } from "../core/document/Node";
+import { SetActiveStateAction } from "../core/actions/StateActions";
 import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
-import { tileImportActions, TilePlacement } from "../core/actions/tileImport";
 import { ReparentNodeAction } from "../core/actions/ReparentNodeAction";
-import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
@@ -114,7 +105,7 @@ import { SetTimelineAction } from "../core/actions/SetTimelineAction";
 import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
 import { FILL_RULES, STROKE_CAPS, STROKE_JOINS } from "../core/document/Node";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
-import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../core/document/Node";
+import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX } from "../core/document/Node";
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
 import { BEZIER_PRESETS, CubicBezier } from "../core/document/Bezier";
 import { lerpViewport } from "../editor/EditorState";
@@ -131,12 +122,8 @@ import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError, sourceRectError, nineSliceError, NodeType } from "../core/document/Node";
 import { NineSliceInsets } from "../core/geometry/NineSlice";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
-import { sequenceImportActions } from "../core/actions/sequenceImport";
-import { asepriteImportActions } from "../core/actions/asepriteImport";
 import { Tileset, findTileset, tilesetTile, copyTileset, withTileWeight } from "../core/document/Tileset";
 import { SetTilesetsAction } from "../core/actions/SetTilesetsAction";
-import { SvgNodeSpec } from "../core/import/SvgNodes";
-import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns, applyTileAnimations, playBounds, runReadout } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
@@ -144,7 +131,7 @@ import { applyPose } from "../core/runtime/Parts";
 import { restartRun, respawnRun } from "../core/runtime/RunFlow";
 import { EDITOR_CAMPAIGN_GAME_ID, emptyCampaign, openCampaignLevel, rememberLeavingLevel } from "../runtime/CampaignProgress";
 import { advanceWorld3D, applyWorld3D, respawnRun3D, restartRun3D, takeWorldSounds, World3DState } from "../core/runtime/World3D";
-import { Entity, playerEntityId } from "../core/document/Entity";
+import { playerEntityId } from "../core/document/Entity";
 import { RuntimeProject } from "./LevelTransitionWorkflow";
 import { followCamera } from "../core/runtime/Camera";
 import { Action } from "../core/actions/Action";
@@ -169,7 +156,9 @@ import { InputSettingsHost } from "./InputSettingsHost";
 import { SetSpatial3DAction } from "../core/actions/SetSpatial3DAction";
 import { dollyCamera3D, orbitCamera3D, panCamera3D } from "../renderer/CameraOrbit3D";
 import { RuntimeControls, Workspace, WorkspaceControls, WORKSPACES } from "./AppShellControls";
-import { FoldersDrawer, AsepritePlacementInput } from "./FoldersDrawer";
+import { FoldersDrawer } from "./FoldersDrawer";
+import { bindImportPlacement } from "./ImportPlacement";
+import { NodeInspectorSections } from "./NodeInspectorSections";
 import { ThreeDInspector } from "./ThreeDInspector";
 import { DocumentControls } from "./DocumentControls";
 import { ScriptPanel } from "./ScriptPanel";
@@ -946,34 +935,21 @@ export function App() {
         refresh();
     }, [dispatcher, es, refresh]);
 
-    /**
-     * Place an asset from the folder browser. It lands at the centre of the CURRENT view (not
-     * a fixed canvas point), inlined as a data: URL so the document stays self-contained —
-     * the same source rule `srcError` applies to a file picked with the image tool.
-     */
-    const placeAsset = useCallback((dataUrl: string, name: string) => {
-        const el = canvasRef.current;
-        const w = 200, h = 150;
-        // THROUGH THE SANCTIONED CONVERSION, not a second copy of it. This restated
-        // `(vp.x + screen) / zoom` by hand — the inverse transform, written out in a file that
-        // already imports the function for it, with its own zoom floor to keep in step.
-        const centre = screenToWorld(es.viewport, { left: 0, top: 0 },
-            (el ? el.clientWidth : 800) / 2, (el ? el.clientHeight : 600) / 2);
-        const cx = centre.x - w / 2;
-        const cy = centre.y - h / 2;
-        const doc = dispatcher.getDocument();
-        const action = new AddNodeAction(doc, "core.image", cx, cy, w, h, "none", undefined, null, { src: dataUrl });
-        if (dispatcher.dispatchAction(action).success) {
-            const id = action.getCreatedNodeId();
-            if (id) {
-                es.selectedNodeIds = [id];
-                // Name it after the file, so the layers panel shows something meaningful.
-                const named = contentActionFor(dispatcher.getDocument(), id, { name });
-                if (named) dispatcher.dispatchAction(named);
-            }
-        }
-        refresh();
-    }, [dispatcher, es, refresh]);
+    const { placeAsset, importSequence, importAseprite, importSvg, importTiles } = useMemo(() => bindImportPlacement({
+        getView: () => {
+            const el = canvasRef.current;
+            return {
+                viewport: es.viewport,
+                clientWidth: el ? el.clientWidth : null,
+                clientHeight: el ? el.clientHeight : null
+            };
+        },
+        getDocument: () => dispatcher.getDocument(),
+        dispatch: action => dispatcher.dispatchAction(action),
+        select: ids => { es.selectedNodeIds = ids; },
+        refresh,
+        warn: message => { console.warn(message); }
+    }), [dispatcher, es, refresh]);
     /**
      * Perform a resolved shortcut. Returns true when it was consumed, so an unbound or
      * inapplicable press still reaches the active tool (Escape cancelling a drag, say).
@@ -2218,85 +2194,6 @@ export function App() {
         refresh();
     }, [selectedNodeId, dispatcher, refresh]);
 
-    /**
-     * Place imported SVG shapes as `core.path` nodes.
-     *
-     * ONE TRANSACTION for the whole drawing. An SVG is a single picture, so a single undo should
-     * remove it — and a node whose commands arrived in a later action would be an empty path if the
-     * import were interrupted between the two, which is the trap the pen tool already avoids.
-     */
-    /**
-     * A folder of numbered images as one animated node.
-     *
-     * THE ACTIONS ARE `sequenceImportActions`, and that is not a stylistic split — it is the same
-     * reason `importTiles` uses `tileImportActions`. A node created inside a transaction exists in
-     * no document yet, so it cannot be reached through `nodeEdit`'s router; and everything left in
-     * this handler is verifiable only by reading it, because `window.electronAPI` is frozen, so the
-     * native folder dialog this import starts with can be neither driven nor stubbed from a probe.
-     * What lives here is therefore only the placement — where on the canvas, at what size.
-     */
-    const importSequence = useCallback((name: string, first: string, track: Keyframe[]) => {
-        const el = canvasRef.current;
-        const w = 200, h = 150;
-        const centre = screenToWorld(es.viewport, { left: 0, top: 0 },
-            (el ? el.clientWidth : 800) / 2, (el ? el.clientHeight : 600) / 2);
-        const doc = dispatcher.getDocument();
-        const { actions, id } = sequenceImportActions(doc, {
-            name, first, track, x: centre.x - w / 2, y: centre.y - h / 2, width: w, height: h
-        });
-        if (actions.length === 0) return;
-        if (dispatcher.dispatchAction(new TransactionAction(doc, "import-sequence", actions)).success) {
-            es.selectedNodeIds = [id];
-        }
-        refresh();
-    }, [dispatcher, es, refresh]);
-
-    /**
-     * An `.aseprite` as one node that plays, with the file's OWN timing and its tags as clips.
-     *
-     * The placement is all that lives here, as with `importSequence` — the actions are
-     * `asepriteImportActions`, where a test can reach them. What is different is that this needed
-     * three things built underneath it first: a frame compositor, a write path for `Document.clips`,
-     * and a transaction able to carry two document-level deltas. None of them was about Aseprite.
-     */
-    const importAseprite = useCallback((p: AsepritePlacementInput) => {
-        const el = canvasRef.current;
-        const centre = screenToWorld(es.viewport, { left: 0, top: 0 },
-            (el ? el.clientWidth : 800) / 2, (el ? el.clientHeight : 600) / 2);
-        const doc = dispatcher.getDocument();
-        // THE FILE'S OWN SIZE, unlike the sequence importer's fixed box: an `.aseprite` states its
-        // canvas, so inventing 200x150 would stretch pixel art that came with exact dimensions.
-        const { actions, id, droppedClips } = asepriteImportActions(doc, {
-            ...p, x: centre.x - p.width / 2, y: centre.y - p.height / 2
-        });
-        if (actions.length === 0) return;
-        if (dispatcher.dispatchAction(new TransactionAction(doc, "import-aseprite", actions)).success) {
-            es.selectedNodeIds = [id];
-        }
-        if (droppedClips > 0) {
-            console.warn(`${droppedClips} tag(s) named frames outside the file's own timeline and were dropped.`);
-        }
-        refresh();
-    }, [dispatcher, es, refresh]);
-
-    const importSvg = useCallback((specs: SvgNodeSpec[]) => {
-        if (specs.length === 0) return;
-        const doc = dispatcher.getDocument();
-        const actions: Action[] = [];
-        const ids: string[] = [];
-        for (const spec of specs) {
-            // The id is minted HERE so both halves can name it — the same reason the pen tool does.
-            const id = generateUUID();
-            ids.push(id);
-            actions.push(new AddNodeAction(doc, "core.path", spec.geometry.x, spec.geometry.y,
-                spec.geometry.width, spec.geometry.height, flatFill(spec.style.fill), id));
-            actions.push(new UpdateNodePathAction(doc, id, spec.path));
-        }
-        dispatcher.dispatchAction(new TransactionAction(doc, "import-svg", actions));
-        es.selectedNodeIds = ids.slice(0, 1);
-        refresh();
-    }, [dispatcher, es, refresh]);
-
     /** Import one glTF/GLB as stable authored identity plus transient decoded mesh data. */
     const import3D = useCallback(async (filePath: string, name: string, loaded: LoadedAsset3D) => {
         const api = window.electronAPI;
@@ -2373,48 +2270,6 @@ export function App() {
         };
         spatial.composition2d = spatial.composition2d ?? { mode: "plane", pixelsPerUnit: 100, lit: false };
         dispatcher.dispatchAction(new SetSpatial3DAction(doc, id, spatial)); refresh();
-    }, [dispatcher, es, refresh]);
-
-    /**
-     * A map as nodes: a whole layer as ONE grid where it fits, and one image per cell where it does
-     * not.
-     *
-     * The actions themselves are `tileImportActions`, which is not a stylistic split — a node created
-     * inside a transaction cannot be reached through `nodeEdit`'s router (it exists in no document
-     * yet), and this file is guarded against constructing those actions raw. That guard is about
-     * VIRTUAL ids, which an import never has; moving the construction to a module that can be tested
-     * satisfies it honestly instead of by exemption.
-     */
-    const importTiles = useCallback((placements: TilePlacement[], tilesets: Tileset[] = [],
-                                     background?: string, screen?: { width: number; height: number }) => {
-        if (placements.length === 0) return;
-        const doc = dispatcher.getDocument();
-        const { actions, ids } = tileImportActions(doc, placements);
-        // THE TILESETS GO IN THE SAME TRANSACTION as the layers that name them, and they go FIRST.
-        // Without this the import produced nodes naming sets the document did not have, so every
-        // imported layer drew nothing — which is exactly what shipped for an hour, because the
-        // importer built the list and dropped it on the floor. Setting them separately would also
-        // be wrong: two undo steps for one import, with a document in between that no author made.
-        const withSets = tilesets.length > 0
-            ? [new SetTilesetsAction(doc, [...(doc.tilesets ?? []) as Tileset[], ...tilesets]), ...actions]
-            : actions;
-        // AND THE MAP'S OWN BACKGROUND (schema 70), in the SAME transaction for the same reason the
-        // tilesets are: one import is one undo step, and a document that briefly had the layers but
-        // not the sky is a state no author ever made. It does NOT overwrite a background the
-        // document already has — placing a second map must not repaint the first one's sky, and the
-        // map that declares nothing (21 of the 24 here) leaves the field exactly as it found it.
-        const withSky = background !== undefined && doc.background === undefined
-            ? [new SetBackgroundAction(doc, background), ...withSets]
-            : withSets;
-        // AND THE MAP'S OWN SIZE AS THE SCREEN (schema 72), by the same two rules: one import is
-        // one undo step, and a document that already declares its screen keeps it — a second map
-        // must not resize the first one's play area. A Tiled map states exactly this, in tiles.
-        const withScreen = screen !== undefined && doc.screen === undefined
-            ? [new SetScreenAction(doc, screen), ...withSky]
-            : withSky;
-        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", withScreen));
-        es.selectedNodeIds = ids.slice(0, 1);
-        refresh();
     }, [dispatcher, es, refresh]);
 
     /**
@@ -3476,31 +3331,7 @@ export function App() {
                             )}
 
 
-                            {/* Authored metadata (schema 64): the author's own kind for this node,
-                                and properties this engine carries without reading. The reason it is
-                                here rather than nowhere is that 41 of them were being parsed out of
-                                every imported map and dropped for want of a field — and a field with
-                                no way to edit it would be the same gap one layer down. */}
-                            <InspectorSection title="Metadata">
-                                <MetadataSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
-                            </InspectorSection>
-
-                            {/* Variants (schema 27): tag a master into a set, or switch an
-                                instance between the masters of the set its own master joins. */}
-                            <InspectorSection title="Variants">
-                                <VariantSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
-                            </InspectorSection>
-
-                            {/* Slots (schema 29): a named hole in a master, and what an
-                                instance puts in it. */}
-                            <InspectorSection title="Slots">
-                                <SlotSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
-                            </InspectorSection>
-
-                            {/* States (M7): what this node looks like in a named context. */}
-                            <InspectorSection title="States">
-                                <StatesSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
-                            </InspectorSection>
+                            <NodeInspectorSections node={node as Node} dispatcher={dispatcher} refresh={refresh} />
 
                             <InspectorSection title="Position & size">
                                 <div style={INSPECTOR_GRID}>
@@ -5551,445 +5382,6 @@ function SelectInput({ value, options, onChange }: { value: string; options: rea
  * written only when `parseTrackList` accepts the draft; anything else stays local and explains
  * itself. Blur drops the draft so the field re-syncs to what the document actually holds.
  */
-
-/**
- * The VARIANTS section — both halves, because either alone is useless.
- *
- * On any node: tag it into a set and give it property values, which is what MAKES a variant set
- * (there is no set object to create — a set is the nodes that name it). On an instance whose
- * master belongs to a set: one dropdown per property the set defines, and choosing swaps which
- * master is drawn while the instance, its position and its overrides stay put.
- */
-
-/**
- * The SLOTS section — again both halves, because either alone is useless.
- *
- * On any node: name it as a slot, which makes it a hole in whatever master contains it. On an
- * instance: one picker per slot the master defines, choosing which node to draw there. The
- * slot keeps supplying the box; its own children are the default whenever nothing fills it.
- */
-
-/**
- * Everything a captured state records: the node's LOOK, not just its paint.
- *
- * Style alone was the original capture, and it made most of the transition machinery
- * unreachable: `blendStates` interpolates geometry and transform, so a prototype could change
- * colour but could never move, grow or turn anything — the animation existed and nothing could
- * author an input for it. A state now pins where the node is and how it is transformed as well
- * as how it is painted, which is what "this node's current look" already claimed to mean.
- *
- * `transform` is included only when the node HAS one, so a state on an untransformed node does
- * not pin an identity transform onto it — an absent transform and an identity one are the same
- * picture, but only the absent one leaves a later rotate free to take effect from the base.
- */
-function captureLook(node: Node): StateDefinition {
-    return {
-        style: { ...node.style },
-        geometry: { ...node.geometry },
-        ...(node.transform ? { transform: { ...node.transform } } : {})
-    };
-}
-
-/**
- * The STATES section — what a node looks like in a named context.
- *
- * Defining one CAPTURES the node's current appearance under a name: you style the node the way
- * you want it to look while hovered, press "Capture", and that becomes the hover state. That is
- * the only authoring gesture that does not need a second inspector — the node in front of you
- * IS the editor for the state.
- */
-function StatesSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
-    const [newState, setNewState] = useState("");
-    const doc = dispatcher.getDocument();
-    const states = node.states ?? {};
-    const active = doc.activeState;
-
-    return (
-        <>
-            <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 4 }}>
-                {active
-                    ? `Showing “${active}”. Capture stores this node's current look under a name.`
-                    : "Capture stores this node's current look under a name; the toolbar switches between them."}
-            </div>
-
-            {Object.keys(states).sort().map(name => (
-                <div key={name} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
-                    <span style={{ flex: 1, color: name === active ? UI.accent : UI.text, fontSize: 11 }}>{name}</span>
-                    <button
-                        title={`Re-capture this node's current look as "${name}"`}
-                        onClick={() => {
-                            dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, captureLook(node)));
-                            refresh();
-                        }}
-                        style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
-                    >⟳</button>
-                    <button
-                        title={`Remove the "${name}" state from this node`}
-                        onClick={() => {
-                            dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, null));
-                            refresh();
-                        }}
-                        style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
-                    >✕</button>
-                </div>
-            ))}
-
-            <input
-                type="text"
-                value={newState}
-                placeholder="capture as… (e.g. hover)"
-                onChange={e => setNewState(e.target.value)}
-                onKeyDown={e => {
-                    if (e.key !== "Enter") return;
-                    const name = newState.trim();
-                    if (!name) return;
-                    // The shared name rule is the authority; the field only explains a refusal.
-                    const err = variantNameError("state name", name, true);
-                    if (err) { window.alert(`That state can't be used: ${err}.`); return; }
-                    dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, captureLook(node)));
-                    setNewState("");
-                    refresh();
-                }}
-                style={{
-                    width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
-                    background: UI.bg, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 2
-                }}
-            />
-        </>
-    );
-}
-
-function SlotSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
-    const doc = dispatcher.getDocument();
-
-    // Which slots does this instance's master expose? Walk exactly what expansion walks.
-    const masterId = node.type === "core.instance" ? resolveVariantMaster(doc, node) : null;
-    const slots = masterId
-        ? masterSubtreeIds(doc, masterId)
-            .map(id => doc.nodes.get(id)!.slot)
-            .filter((s): s is string => typeof s === "string")
-        : [];
-    const uniqueSlots = [...new Set(slots)].sort();
-
-    // Anything top-level can fill a slot — except this instance itself, which would be a cycle
-    // the expansion would have to stop, drawing nothing and looking broken.
-    const candidates = doc.rootNodeUuids
-        .filter(id => id !== node.id)
-        .map(id => ({ id, label: doc.nodes.get(id)?.name ?? doc.nodes.get(id)?.type ?? id }));
-
-    return (
-        <>
-            {uniqueSlots.length > 0 && (
-                <>
-                    <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 4 }}>
-                        This component exposes {uniqueSlots.length === 1 ? "a slot" : `${uniqueSlots.length} slots`}.
-                        An empty one draws its own default content.
-                    </div>
-                    {uniqueSlots.map(name => (
-                        <div key={name}>
-                            <label style={INSPECTOR_LABEL}>{name}</label>
-                            <SelectInput
-                                value={node.slotContent?.[name] ?? ""}
-                                options={["", ...candidates.map(c => c.id)]}
-                                onChange={v => {
-                                    dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), node.id, name, v || null));
-                                    refresh();
-                                }}
-                            />
-                        </div>
-                    ))}
-                </>
-            )}
-
-            {/* The MASTER half: make this node a slot. */}
-            <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6, marginTop: uniqueSlots.length ? 8 : 0 }}>
-                <input
-                    type="checkbox"
-                    checked={node.slot !== undefined}
-                    onChange={e => {
-                        dispatcher.dispatchAction(new SetSlotAction(dispatcher.getDocument(), node.id, e.target.checked ? "content" : null));
-                        refresh();
-                    }}
-                />
-                Is a slot
-            </label>
-            {node.slot !== undefined && (
-                <>
-                    <label style={INSPECTOR_LABEL}>Slot name</label>
-                    <TextInput
-                        value={node.slot}
-                        placeholder="content"
-                        onChange={v => {
-                            // `slotError` is the authority; an empty name is simply not committed.
-                            if (slotError(v) !== null) return;
-                            dispatcher.dispatchAction(new SetSlotAction(dispatcher.getDocument(), node.id, v));
-                            refresh();
-                        }}
-                    />
-                </>
-            )}
-        </>
-    );
-}
-
-/**
- * The author's own kind for a node, and its custom properties (schema 64).
- *
- * WHAT THE ENGINE CARRIES WITHOUT READING, which is exactly why it needs a panel: nothing else in
- * the app would ever show it, so a property imported from a map would live in the file, survive
- * every save, and be invisible to the person who owns it.
- *
- * THE TYPE IS A FREE TEXT FIELD rather than a dropdown, and that is deliberate. The document stores
- * whatever the file declared so that a map written by a newer editor round-trips untouched; a
- * closed list here would make those types uneditable — visible, unchangeable, and silently replaced
- * the moment anyone touched the row. The common ones are offered as a datalist instead.
- */
-function MetadataSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
-    const [newName, setNewName] = useState("");
-    const data = node.userData ?? {};
-    const names = Object.keys(data).sort();
-
-    const write = (patch: { className?: string | null; userData?: UserData | null; entity?: Entity | null }) => {
-        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), node.id, patch));
-        refresh();
-    };
-    const setEntity = <K extends keyof Entity>(key: K, value: Entity[K] | undefined) => {
-        const next: Entity = { ...(node.entity ?? {}) };
-        if (value === undefined) delete next[key]; else next[key] = value;
-        write({ entity: Object.keys(next).length ? next : null });
-    };
-    /** One property replaced, or removed when `next` is null — the whole map travels, as the delta wants. */
-    const setProp = (name: string, next: { type: string; propertyType?: string; value: string } | null) => {
-        const copy: UserData = { ...data };
-        if (next === null) delete copy[name];
-        else copy[name] = next;
-        write({ userData: copy });
-    };
-
-    return (
-        <>
-            <label style={INSPECTOR_LABEL}>Class</label>
-            <TextInput
-                value={node.className ?? ""}
-                placeholder="none"
-                onChange={v => write({ className: v.trim() === "" ? null : v.trim() })}
-            />
-            <div style={{ color: UI.textDim, fontSize: 10, marginTop: 10, marginBottom: 4 }}>Runtime entity</div>
-            <label style={INSPECTOR_LABEL}>Body</label>
-            <SelectInput value={node.entity?.body ?? ""} options={["", "static", "dynamic", "oneway"]}
-                onChange={v => setEntity("body", v === "" ? undefined : v as Entity["body"])} />
-            <label style={{ ...INSPECTOR_LABEL, display: "flex", gap: 6 }}>
-                <input type="checkbox" checked={node.entity?.player === true}
-                    onChange={e => setEntity("player", e.target.checked || undefined)} /> Player
-            </label>
-            <label style={INSPECTOR_LABEL}>Respawn anchor node id</label>
-            <TextInput value={node.entity?.respawnAt ?? ""} placeholder="optional node id"
-                onChange={v => setEntity("respawnAt", v.trim() || undefined)} />
-            <label style={INSPECTOR_LABEL}>Next level project</label>
-            <TextInput value={node.entity?.transitionTo ?? ""} placeholder="level-2.vde"
-                onChange={v => setEntity("transitionTo", v.trim() || undefined)} />
-            <label style={INSPECTOR_LABEL}>Warp destination node id</label>
-            <TextInput value={node.entity?.warpsTo ?? ""} placeholder="optional node id"
-                onChange={v => setEntity("warpsTo", v.trim() || undefined)} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, marginTop: 6 }}>
-                {(["stompable", "deadly", "goal", "collectible"] as const).map(key => (
-                    <label key={key} style={{ ...INSPECTOR_LABEL, display: "flex", gap: 5 }}>
-                        <input type="checkbox" checked={node.entity?.[key] === true}
-                            onChange={e => setEntity(key, e.target.checked || undefined)} /> {key}
-                    </label>
-                ))}
-            </div>
-            {(["friction", "patrol", "powers", "stars", "bounces"] as const).map(key => (
-                <div key={key}>
-                    <label style={INSPECTOR_LABEL}>{key}</label>
-                    <NumInput value={node.entity?.[key] ?? 0}
-                        onChange={v => setEntity(key, Number.isFinite(v) ? v : undefined)} />
-                </div>
-            ))}
-            <ActorPlacementPanel key={`actor-${node.id}`} nodeId={node.id} dispatcher={dispatcher} onPlaced={refresh}/>
-            <GameplayPanel key={node.id} entity={node.entity ?? {}} onChange={entity => write({ entity })}
-                assets={dispatcher.getDocument().behaviorAssets}
-                variables={dispatcher.getDocument().gameplayVariables}
-                functions={dispatcher.getDocument().behaviorFunctions}
-                onFunctionsChange={functions=>{const result=dispatcher.dispatchAction(new SetBehaviorFunctionsAction(dispatcher.getDocument(),functions));refresh();return result.success;}}
-                onVariablesChange={variables=>{const result=dispatcher.dispatchAction(new SetGameplayVariablesAction(dispatcher.getDocument(),variables));refresh();return result.success;}}
-                onAssetsChange={(assets,entity)=>{dispatcher.dispatchAction(new SetBehaviorAssetsAction(dispatcher.getDocument(),assets,entity?{nodeId:node.id,entity}:undefined));refresh();}} />
-            {node.spatial3d && <>
-                <label style={INSPECTOR_LABEL}>3D gravity (enables contact solver)</label>
-                <NumInput value={node.entity?.gravity3d ?? 0} onChange={v => setEntity("gravity3d", Math.max(0, Math.min(1000, v)))} />
-                <label style={INSPECTOR_LABEL}>3D restitution</label>
-                <NumInput value={node.entity?.restitution3d ?? 0} onChange={v => setEntity("restitution3d", Math.max(0, Math.min(1, v)))} />
-            </>}
-            <datalist id="vde-prop-types">
-                {["string", "int", "float", "bool", "color", "file", "object"].map(t => <option key={t} value={t} />)}
-            </datalist>
-            <div style={{ color: UI.textFaint, fontSize: 10, marginTop: 8, marginBottom: 4 }}>
-                {names.length === 0
-                    ? "No imported/custom properties. Runtime behavior uses the typed fields above."
-                    : `${names.length} imported/custom propert${names.length === 1 ? "y" : "ies"}; preserved for round trips.`}
-            </div>
-            {names.map(name => {
-                const p = data[name];
-                return (
-                    <div key={name} style={{ display: "grid", gridTemplateColumns: "1fr 64px 20px", gap: 4, marginBottom: 3 }}>
-                        <TextInput value={p.value} onChange={v => setProp(name, { ...p, value: v })} />
-                        <input
-                            list="vde-prop-types"
-                            value={p.type}
-                            title={`Type of "${name}"${p.propertyType ? ` (${p.propertyType})` : ""}`}
-                            onChange={e => {
-                                // AN EMPTY TYPE IS NOT A TYPE — `userDataError` refuses it, and the
-                                // action would silently do nothing. Mid-edit it reads as "string".
-                                const t = e.target.value.trim();
-                                setProp(name, { ...p, type: t === "" ? "string" : t });
-                            }}
-                            style={{ ...SELECT_STYLE, minWidth: 0 }}
-                        />
-                        <button
-                            onClick={() => setProp(name, null)}
-                            title={`Remove "${name}"`}
-                            aria-label={`Remove property ${name}`}
-                            style={{ ...ADJUST_BUTTON, padding: "0 4px" }}
-                        >×</button>
-                        <div style={{ gridColumn: "1 / -1", color: UI.textFaint, fontSize: 9, marginTop: -2 }}>{name}</div>
-                    </div>
-                );
-            })}
-            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                <TextInput value={newName} placeholder="new property name" onChange={setNewName} />
-                <button
-                    disabled={newName.trim() === "" || Object.prototype.hasOwnProperty.call(data, newName.trim())}
-                    onClick={() => {
-                        const n = newName.trim();
-                        if (n === "") return;
-                        // `string` IS THE FORMAT'S DEFAULT, so a new property starts as one rather
-                        // than as a type the author has to correct before it means anything.
-                        setProp(n, { type: "string", value: "" });
-                        setNewName("");
-                    }}
-                    aria-label="Add property"
-                    style={ADJUST_BUTTON}
-                >Add</button>
-            </div>
-        </>
-    );
-}
-
-function VariantSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
-    const [newProp, setNewProp] = useState("");
-    const doc = dispatcher.getDocument();
-    const variant = node.variant;
-
-    const setVariant = (v: VariantKey | null) => {
-        dispatcher.dispatchAction(new SetVariantAction(dispatcher.getDocument(), node.id, v));
-        refresh();
-    };
-
-    // An instance shows the PICKER for the set its master belongs to.
-    const masterId = node.type === "core.instance" ? node.componentId : undefined;
-    const masterSet = masterId ? doc.nodes.get(masterId)?.variant?.set : undefined;
-    const props = masterSet ? variantProperties(doc, masterSet) : null;
-    const resolvedId = node.type === "core.instance" ? resolveVariantMaster(doc, node) : null;
-    const resolved = resolvedId ? doc.nodes.get(resolvedId) : null;
-
-    return (
-        <>
-            {props && masterSet && (
-                <>
-                    <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 4 }}>
-                        Set “{masterSet}” — switching redraws this instance from another master.
-                    </div>
-                    {Object.keys(props).length === 0 && (
-                        <div style={{ color: UI.textFaint }}>This set has no properties yet.</div>
-                    )}
-                    {Object.entries(props).map(([prop, values]) => {
-                        // What this instance SHOWS: its own choice, else the master's own value.
-                        const current = node.variants?.[prop] ?? resolved?.variant?.values[prop] ?? "";
-                        return (
-                            <div key={prop}>
-                                <label style={INSPECTOR_LABEL}>{prop}</label>
-                                <SelectInput
-                                    value={current}
-                                    options={values}
-                                    onChange={v => {
-                                        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), node.id, prop, v));
-                                        refresh();
-                                    }}
-                                />
-                            </div>
-                        );
-                    })}
-                    {resolvedId && resolvedId !== masterId && (
-                        <div style={{ color: UI.accent, fontSize: 10, marginBottom: 6 }}>
-                            Drawing “{resolved?.name ?? resolvedId}”.
-                        </div>
-                    )}
-                </>
-            )}
-
-            {/* The MASTER half: tag this node into a set. */}
-            <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6, marginTop: props ? 8 : 0 }}>
-                <input
-                    type="checkbox"
-                    checked={!!variant}
-                    onChange={e => setVariant(e.target.checked ? { set: "Set", values: {} } : null)}
-                />
-                In a variant set
-            </label>
-            {variant && (
-                <>
-                    <label style={INSPECTOR_LABEL}>Set name</label>
-                    <TextInput
-                        value={variant.set}
-                        placeholder="Button"
-                        onChange={v => { if (v.length > 0) setVariant({ ...variant, set: v }); }}
-                    />
-                    {Object.entries(variant.values).map(([k, v]) => (
-                        <div key={k} style={{ display: "flex", gap: 4, alignItems: "flex-end", marginBottom: 4 }}>
-                            <div style={{ flex: 1 }}>
-                                <label style={INSPECTOR_LABEL}>{k}</label>
-                                <TextInput
-                                    value={v}
-                                    onChange={nv => { if (nv.length > 0) setVariant({ ...variant, values: { ...variant.values, [k]: nv } }); }}
-                                />
-                            </div>
-                            <button
-                                title={`Remove the "${k}" property`}
-                                onClick={() => {
-                                    const values = { ...variant.values };
-                                    delete values[k];
-                                    setVariant({ ...variant, values });
-                                }}
-                                style={{ fontSize: 10, padding: "2px 5px", marginBottom: 4, background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
-                            >✕</button>
-                        </div>
-                    ))}
-                    <input
-                        type="text"
-                        value={newProp}
-                        placeholder="add property (e.g. size)"
-                        onChange={e => setNewProp(e.target.value)}
-                        onKeyDown={e => {
-                            if (e.key !== "Enter") return;
-                            const key = newProp.trim();
-                            if (!key) return;
-                            // `variantError` is the authority; the field only explains a refusal.
-                            const candidate: VariantKey = { ...variant, values: { ...variant.values, [key]: "default" } };
-                            const err = variantError(candidate);
-                            if (err) { window.alert(`That property can't be used: ${err}.`); return; }
-                            setVariant(candidate);
-                            setNewProp("");
-                        }}
-                        style={{
-                            width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
-                            background: UI.bg, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 2
-                        }}
-                    />
-                </>
-            )}
-        </>
-    );
-}
 
 function TrackListInput({ value, placeholder, allowEmpty, onCommit }: {
     value: string;
