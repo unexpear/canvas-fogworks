@@ -3,6 +3,8 @@
  * @description Informational SCALE-001 release budgets. Additional host samples compare
  * against the frozen cohort and do not change it. Comparisons do not fail CI.
  * previewHardwareAdmission prints a physical-GPU cohort edit and leaves the files unchanged.
+ * frozenGpuCohortReport records that the published Iris Xe GPU entry is already frozen.
+ * Without a retained renderer string it is not another host sample.
  *
  * Interactive frame work still aims at 16.67 ms. A release budget is 1.5× the highest
  * p95 in the frozen cohort for that workload, rounded up to 0.1 ms. One hardware GPU
@@ -490,7 +492,37 @@ function previewHardwareAdmission(sample, options = {}) {
     };
 }
 
-/** Directory view. Every row is unattested, so none of them are eligible. */
+/**
+ * The frozen GPU cohort is already admitted. A missing renderer string means the
+ * published p95 values are not a host-sample file and cannot be admitted again.
+ * This does not move budgets or enable the CI gate.
+ */
+function frozenGpuCohortReport() {
+    const hosts = FROZEN_GPU_HOSTS.map(host => {
+        const renderer = host.renderer == null || String(host.renderer).trim() === "" ? null : String(host.renderer).trim();
+        return {
+            id: host.id,
+            recorded: host.recorded,
+            rendererKind: host.rendererKind,
+            rendererRetained: renderer != null,
+            alreadyFrozen: true,
+            refileable: false,
+            eligible: false,
+            blockers: renderer == null
+                ? ["the unmasked renderer string was not retained, so this frozen entry is not a host sample"]
+                : [`${host.id} is already a frozen cohort id`]
+        };
+    });
+    return {
+        hosts,
+        refileable: 0,
+        ciGateEnabled: CI_GATE_ENABLED,
+        ciGateJustified: false,
+        note: "Published Iris Xe p95 values are this cohort. They are not a second physical GPU host. A later sample still needs a retained renderer string, the three admission workloads, and --physical-gpu from someone who knows the machine. One added host does not enable a CI gate."
+    };
+}
+
+/** Directory view. Every stored row is unattested, so none of them are eligible. The frozen cohort is reported beside them and is not refiled. */
 function hardwareAdmissionRoster(samples) {
     if (!Array.isArray(samples)) throw new Error("sample list must be an array");
     const rows = samples.map(sample => {
@@ -512,6 +544,7 @@ function hardwareAdmissionRoster(samples) {
         stored: rows.length,
         readyForOperatorAttestation: rows.filter(row => row.readyForOperatorAttestation).length,
         admittedByThisCommand: 0,
+        frozenGpuCohort: frozenGpuCohortReport(),
         rows
     };
 }
@@ -717,6 +750,7 @@ module.exports = {
     normalizeHostSample,
     compareHostSample,
     previewHardwareAdmission,
+    frozenGpuCohortReport,
     hardwareAdmissionRoster,
     mergeHostSamples,
     loadHostSampleDirectory,
