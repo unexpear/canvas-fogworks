@@ -1,6 +1,7 @@
 # Shared player runtime — loading and session lifecycle
 
 <!-- describes: src/runtime, src/app/Asset3DImportWorkflow.ts, src/app/LevelTransitionWorkflow.ts, scripts/smoke-level-transition.js -->
+<!-- re-read 2026-10-04: packaged games can take their save-migration list from the entry document. Session loading still does not write the new slot. -->
 <!-- re-read 2026-10-02: PlayerSession3D accepts an explicit save-migration list. Loading and session staging are otherwise unchanged. -->
 
 Implemented 2026-09-12 as Q02 loading and player-session slices in the [engine roadmap](ENGINE-ROADMAP.md).

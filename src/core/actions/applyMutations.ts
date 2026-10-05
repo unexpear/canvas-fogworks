@@ -225,6 +225,7 @@ export function applyMutationsToDocument(
             case "behaviorAssets": { doc.behaviorAssets=delta.behaviorAssets; return; }
             case "gameplayVariables": { doc.gameplayVariables=delta.gameplayVariables; return; }
             case "behaviorFunctions": { doc.behaviorFunctions=delta.behaviorFunctions; return; }
+            case "saveMigrations": { doc.saveMigrations = delta.saveMigrations; return; }
             case "activeState": {
                 // Document-level state (M7): which named state everything resolves against.
                 doc.activeState = delta.activeState;

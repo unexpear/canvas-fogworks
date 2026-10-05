@@ -120,6 +120,8 @@ export interface SerializedDocument {
         behaviorAssets?: readonly import("./BehaviorAssets").BehaviorAsset[];
         gameplayVariables?: readonly import("./GameplayData").GameplayVariable[];
         behaviorFunctions?: readonly import("./BehaviorFunctions").BehaviorFunction[];
+        /** Previous package hashes this document may adopt (schema 90). Absent means none. */
+        saveMigrations?: readonly import("./SaveMigrations").DocumentSaveMigration[];
         /** What the document sits on (schema 70). Absent = transparent, as every document was. */
         background?: string;
         screen?: { width: number; height: number };
@@ -164,6 +166,7 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             ...(doc.behaviorAssets !== undefined ? { behaviorAssets: doc.behaviorAssets } : {}),
             ...(doc.gameplayVariables !== undefined ? {gameplayVariables:doc.gameplayVariables} : {}),
             ...(doc.behaviorFunctions !== undefined ? {behaviorFunctions:doc.behaviorFunctions} : {}),
+            ...(doc.saveMigrations !== undefined && doc.saveMigrations.length ? { saveMigrations: doc.saveMigrations } : {}),
             // Omitted when absent, so a document with no sky serialises byte-for-byte as it did
             // before schema 70 — the same rule every optional field here follows.
             ...(doc.background !== undefined ? { background: doc.background } : {}),
@@ -274,6 +277,10 @@ export function deserializeDocument(json: string): ProjectDocument {
     if ("behaviorAssets" in migrated.document) doc.behaviorAssets = migrated.document.behaviorAssets as import("./BehaviorAssets").BehaviorAsset[];
     if ("gameplayVariables" in migrated.document) doc.gameplayVariables = migrated.document.gameplayVariables as import("./GameplayData").GameplayVariable[];
     if ("behaviorFunctions" in migrated.document) doc.behaviorFunctions = migrated.document.behaviorFunctions as import("./BehaviorFunctions").BehaviorFunction[];
+    if ("saveMigrations" in migrated.document) {
+        const table = (migrated.document as { saveMigrations?: unknown }).saveMigrations;
+        if (!(Array.isArray(table) && table.length === 0)) doc.saveMigrations = table as import("./SaveMigrations").DocumentSaveMigration[];
+    }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
     const nodesObj = migrated.document.nodes;
@@ -465,6 +472,8 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "87") { raw = { ...raw, version: "88" }; version = "88"; }
     // 88 -> 89: optional transition and 3D clip crossfade durations. Absent still cuts immediately.
     if (version === "88") { raw = { ...raw, version: "89" }; version = "89"; }
+    // 89 -> 90: optional saveMigrations. Absent already meant no cross-build adoption.
+    if (version === "89") { raw = { ...raw, version: "90" }; version = "90"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

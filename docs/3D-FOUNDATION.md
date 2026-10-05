@@ -1,6 +1,7 @@
 # 3D Foundation — adoption plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
+<!-- re-read 2026-10-04: schema 90 stores the save-migration list on the document. Meshes, lighting, collision and import are unchanged. -->
 <!-- re-read 2026-10-02: progress adoption does not change meshes, lighting, collision or import.
      The packaged 3D player plays embedded sound cues, draws screen-space text and can stream
      buffer/image/HDR chunks. Meshes, lighting, collision and import behavior are unchanged.

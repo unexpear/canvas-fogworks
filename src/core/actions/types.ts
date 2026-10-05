@@ -188,7 +188,9 @@ export type NodeDelta =
     | { kind: "assets3d"; assets3d: Asset3D[] | undefined }
     | { kind: "behaviorAssets"; behaviorAssets: import("../document/BehaviorAssets").BehaviorAsset[] | undefined }
     | { kind: "gameplayVariables"; gameplayVariables: import("../document/GameplayData").GameplayVariable[] | undefined }
-    | { kind: "behaviorFunctions"; behaviorFunctions: import("../document/BehaviorFunctions").BehaviorFunction[] | undefined };
+    | { kind: "behaviorFunctions"; behaviorFunctions: import("../document/BehaviorFunctions").BehaviorFunction[] | undefined }
+    /** Previous package hashes this document may adopt (schema 90). `undefined` removes the list. */
+    | { kind: "saveMigrations"; saveMigrations: ProjectDocument["saveMigrations"] };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {
@@ -240,6 +242,7 @@ export interface DocumentSnapshot {
     behaviorAssets?: ProjectDocument["behaviorAssets"];
     gameplayVariables?: ProjectDocument["gameplayVariables"];
     behaviorFunctions?: ProjectDocument["behaviorFunctions"];
+    saveMigrations?: ProjectDocument["saveMigrations"];
 }
 
 /** The serialized payload needed to store history for Undo/Redo */

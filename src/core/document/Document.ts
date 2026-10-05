@@ -182,13 +182,15 @@ export const CURRENT_VERSION: string =
  *   "88" — adds editable generated-solid operation trees.
  *         Absent rules and policy preserve the compatibility platformer runtime.
  *   "89" — optional animation transition fade and 3D clip fade. Absent still switches immediately.
+ *   "90" — optional saveMigrations. Absent means this document adopts no previous package.
  */
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 import type { Asset3D } from "./Spatial3D";
+import type { DocumentSaveMigration } from "./SaveMigrations";
 
-export const SCHEMA_VERSION = "89";
+export const SCHEMA_VERSION = "90";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -265,6 +267,11 @@ export interface ProjectDocument {
     behaviorAssets?: import("./BehaviorAssets").BehaviorAsset[];
     gameplayVariables?: import("./GameplayData").GameplayVariable[];
     behaviorFunctions?: import("./BehaviorFunctions").BehaviorFunction[];
+    /**
+     * Previous package-content hashes whose saves this document may adopt (schema 90).
+     * `versions` are player-progress format versions. Absent means no cross-build adoption.
+     */
+    saveMigrations?: DocumentSaveMigration[];
     /**
      * What the document is LIT by (schema 42). Absent = unlit, which every document was.
      *

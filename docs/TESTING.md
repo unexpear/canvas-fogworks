@@ -49,6 +49,7 @@ samples under `scripts/benchmark-host-samples/` do not move it. Software GL stay
 not a hardware budget. Workloads, limits and measured budgets are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- re-read 2026-10-04: export copies the entry document's saveMigrations list. Loading a listed save still does not write the new slot. -->
 <!-- re-read 2026-10-02: dependency copies now write a filesSynced journal after payload file
      flushes, and test:recovery kills at those checkpoints. A filesSynced journal keeps the copies.
      That flag is not a power-loss proof. test:progress-crash covers the gameplay progress slot.
@@ -63,7 +64,7 @@ not a hardware budget. Workloads, limits and measured budgets are in [PRODUCTION
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
-> 🔒 Frozen contract · schema v89 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
+> 🔒 Frozen contract · schema v90 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
 
 `npm run smoke:authoring` checks exported PNG pixels and offline-game victory in real Electron Chromium. `npm run benchmark:authoring` reports owned 250/1000-node CPU/load measurements, exact history retention, a longer mixed soak, noisy 2048 raster work and larger textured scenes. `benchmark:gpu` adds those textured scenes when a display is available and labels the renderer hardware, software, unavailable, or unknown. `node scripts/record-benchmark-sample.js` stores that JSON beside the frozen budgets. `node scripts/preview-hardware-admission.js` prints a physical-GPU admission for a stored sample and leaves the frozen budgets unchanged. Software GL stays ineligible. These are informational, not hardware-dependent CI thresholds. See [Production workflows](PRODUCTION-WORK.md).
 

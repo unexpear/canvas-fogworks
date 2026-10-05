@@ -1,6 +1,7 @@
 # Canvas Fogworks — full engine development plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/export, src/core/script, src/runtime, src/renderer, src/app/RuntimeAudio.ts, package.json -->
+<!-- re-read 2026-10-04: the inspector authors the save-migration list. Full prefabs remain open. -->
 <!-- re-read 2026-10-02: player progress can adopt an explicitly listed previous content hash.
      package.json records test:progress-crash. Prefabs and the editor migration control remain open.
      spatial3d-v1 can stream buffer/image/HDR chunks and scores a clean-machine EXE record with
@@ -39,7 +40,7 @@ for 2D/3D players. The native progress bridge is slot-only; it grants no editor 
 [Gameplay foundations](GAMEPLAY-FOUNDATIONS.md) for acceptance evidence and limits. Q06 remains
 partial: the named-input Controls panel is in the editor and both players. Explicit cross-build
 save adoption and `test:progress-crash` are in; that crash test is not a power-loss proof or a GUI
-renderer crash. Full prefabs and an editor control for the migration list remain open. Visited-level
+renderer crash. The inspector authors the migration list. Full prefabs remain open. Visited-level
 campaign progress is player-progress v6. F1/F2 are not complete.
 
 ## 1. Purpose and definition of success
