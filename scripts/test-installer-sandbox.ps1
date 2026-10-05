@@ -62,6 +62,11 @@ function Write-Result([switch]$RequireAcceptable) {
         if (Test-Path -LiteralPath $writerErr) { $detail = Get-Content -LiteralPath $writerErr -Raw }
         throw "Guest evidence file was rejected. $detail"
     }
+    if ($RequireAcceptable) {
+        if (-not (Test-Path -LiteralPath $resultPath)) { throw 'Guest evidence writer exited 0 without result.json. This file is not a pass.' }
+        $body = [System.IO.File]::ReadAllText($resultPath)
+        if ($body -notmatch '"status": "passed"') { throw 'Guest evidence writer exited 0 without status passed. This file is not a pass.' }
+    }
 }
 function Record-Step([string]$message) {
     $steps.Add($message)
@@ -331,7 +336,8 @@ try {
         'C:\FogworksInput\node.exe',
         'C:\FogworksInput\scripts\normalize-guest-result.js',
         'C:\FogworksInput\scripts\installerEvidence.js',
-        'C:\FogworksInput\scripts\installerLifecycle.js'
+        'C:\FogworksInput\scripts\installerLifecycle.js',
+        'C:\FogworksInput\scripts\validate-hardware-gpu.js'
     )) {
         if (-not (Test-Path -LiteralPath $required)) { throw "Staged evidence writer is missing: $required" }
     }
