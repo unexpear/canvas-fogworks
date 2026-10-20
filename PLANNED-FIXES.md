@@ -7,6 +7,7 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-10-20: schema 91 adds optional Spatial3D fog, particles and lightString. This historical fix-pass record is otherwise unchanged. -->
 <!-- re-read 2026-10-04: schema 90 adds optional saveMigrations. This historical fix-pass record is otherwise unchanged. -->
 <!-- re-read 2026-09-07 against schema 78 and the shared-authoring follow-up. This is still
      the historical July fix-pass record; current evidence is in docs/PRODUCTION-WORK.md. -->

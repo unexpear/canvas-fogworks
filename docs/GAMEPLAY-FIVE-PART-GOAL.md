@@ -1,6 +1,7 @@
 # Gameplay foundations and 3D level authoring — delivery goal
 
 <!-- describes: src/core/document, src/core/runtime, src/core/actions, src/runtime, src/player, src/player3d, src/app/BehaviorGraphPanel.tsx, scripts/smoke-player.js -->
+<!-- re-read 2026-10-20: schema 91 adds optional 3D fog, particle emitters and light strings. They are visual only and do not change gameplay command semantics, prefabs or the five-part goal. Prefabs remain open. -->
 <!-- re-read 2026-10-04: the inspector authors the migration list and loading still does not write the new slot. World-partition cell streaming lives beside the package reader. It does not change gameplay command semantics, prefabs or the five-part goal. Prefabs remain open. -->
 <!-- re-read 2026-10-02: explicit save-build maps and progress-writer kill/relaunch checks are in.
      They do not complete parts 3–5. Prefab instances remain open. The kill test is not a
