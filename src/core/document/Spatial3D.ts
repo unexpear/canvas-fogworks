@@ -2,7 +2,8 @@
  * @module Spatial3D
  * @description Persisted 3D authoring contracts: transforms and typed scene components,
  * plus stable records for imported mesh, material and texture assets (schema 74) and authored
- * environment references (schema 75) and explicit 2D-in-3D composition (schema 76).
+ * environment references (schema 75) and explicit 2D-in-3D composition (schema 76). Fog, particle
+ * emitters and light strings (schema 91) are defined and validated in Effects3D.
  *
  * These types deliberately do not reuse Node.transform or Node.mesh. Those are 2D
  * authoring concepts; changing their meaning would corrupt existing documents. Asset ids
@@ -11,6 +12,7 @@
 
 import {BlockoutShape,blockoutError} from "../geometry/Blockout3D";
 import {SolidTree3D,solidTreeError} from "../geometry/SolidTree3D";
+import { Fog3D, fog3DError, LightString3D, lightString3DError, ParticleEmitter3D, particles3DError } from "./Effects3D";
 
 export interface Vec3 { x: number; y: number; z: number }
 /** Quaternion component order matches glTF: x, y, z, w. */
@@ -72,6 +74,12 @@ export interface Spatial3D {
     collider?: Collider3D;
     environment?: Environment3D;
     composition2d?: Composition2DIn3D;
+    /** Scene fog; the first node carrying it wins. Schema 91. */
+    fog?: Fog3D;
+    /** Particle emitter at this node's world transform. Schema 91. */
+    particles?: ParticleEmitter3D;
+    /** Wire, clips, bulbs and one point light per bulb along local points. Schema 91. */
+    lightString?: LightString3D;
 }
 
 export type Asset3DKind = "mesh" | "material" | "texture";
@@ -257,6 +265,10 @@ export function spatial3DError(spatial: unknown): string | null {
             }
         }
     }
+
+    if (s.fog !== undefined) { const err = fog3DError(s.fog); if (err) return err; }
+    if (s.particles !== undefined) { const err = particles3DError(s.particles); if (err) return err; }
+    if (s.lightString !== undefined) { const err = lightString3DError(s.lightString); if (err) return err; }
 
     if (s.collider !== undefined) {
         const collider = s.collider as Partial<Collider3D>;

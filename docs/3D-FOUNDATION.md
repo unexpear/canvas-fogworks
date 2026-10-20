@@ -1,6 +1,7 @@
 # 3D Foundation — adoption plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
+<!-- re-read 2026-10-20: schema 91 adds optional Spatial3D fog, particles and lightString. The renderer adds per-pixel clustered point lights, distance and height fog, CPU-evaluated billboard particles and generated light-string geometry with bulb lights. In-fog glow is fake additive sprites. Meshes, collision and import are unchanged. -->
 <!-- re-read 2026-10-04: schema 90 stores the save-migration list on the document. World-partition cells stream declared payloads around a caller focus. Meshes, lighting, collision and import are unchanged. No clean-machine EXE pass or release signature is recorded. -->
 <!-- re-read 2026-10-02: progress adoption does not change meshes, lighting, collision or import.
      The packaged 3D player plays embedded sound cues, draws screen-space text and can stream

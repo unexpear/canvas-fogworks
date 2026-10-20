@@ -1,6 +1,7 @@
 # Standalone 3D export and Windows player
 
 <!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/playerExeEvidence.js, scripts/check-player-exe-evidence.js, scripts/packageSignature.js, scripts/check-package-signature.js, scripts/check-world-partition.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-10-20: the 3D player draws schema 91 fog, particle emitters and light strings through the same buildFrame3D and emitWebGL3D path as the editor. Package version 1 and the EXE evidence gate are unchanged. F1 stays open. -->
 <!-- re-read 2026-10-04: the editor can author save migrations on the document. Provenance stamps null publisher, signature and certificate. check:package-signature fail-closes when any of those are missing. --world-partition attaches a caller-supplied cell table after --stream. The packaged player does not page those cells from the camera. Package version 1 and the EXE evidence gate are unchanged. F1 stays open. -->
 <!-- re-read 2026-10-02: package.json records test:progress-crash. The desktop slot may read package-declared predecessor hashes.
      --stream writes buffer/image/HDR chunks beside the player. Models, fonts, embedded cues and

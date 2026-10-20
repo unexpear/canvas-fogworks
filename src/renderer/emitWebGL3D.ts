@@ -12,6 +12,8 @@ import { buildLightClusters3D, LightClusters3D, lightSignature3D, MAX_CLUSTER_CE
     MAX_CLUSTER_LIGHTS_3D } from "./LightClusters3D";
 import { preparedEnvironment3D } from "./EnvironmentIbl3D";
 import { GPU_SKIN_JOINTS } from "../core/import/GltfMotion";
+import { FOG_GLSL_3D, FOG_MODE_CODE_3D, fogBackground3D } from "./Fog3D";
+import { fogGlowBatch3D, type ParticleBatch3D } from "./Particles3D";
 
 /** Constant-index joint lookup. WebGL 1 rejects a dynamic index into a uniform array. */
 function skinShaderSource(): { declarations: string; functions: string } {
@@ -151,6 +153,7 @@ vec3 linearToSrgb(vec3 c) {
     c = max(c, vec3(0.0));
     return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
 }
+${FOG_GLSL_3D}
 vec3 fresnelSchlick(float cosTheta, vec3 f0) {
     return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
 }
@@ -224,7 +227,7 @@ void main() {
         roughness *= metallicRoughness.g;
         metallic *= metallicRoughness.b;
     }
-    if (u_unlit) { gl_FragColor = vec4(linearToSrgb(base.rgb), base.a); return; }
+    if (u_unlit) { gl_FragColor = vec4(linearToSrgb(applyFog(base.rgb, v_worldPosition)), base.a); return; }
     vec3 normal = normalize(v_worldNormal) * (gl_FrontFacing ? 1.0 : -1.0);
 #if HAS_DERIVATIVES
     if (u_hasNormalTexture) {
@@ -306,7 +309,7 @@ void main() {
     vec3 emissive = u_emissive;
     if (u_hasEmissiveTexture) emissive *= srgbToLinear(texture2D(u_emissiveTexture,
         materialUv(u_emissiveOffsetScale, u_emissiveRotation, u_emissiveUvSet)).rgb);
-    gl_FragColor = vec4(linearToSrgb(reflected + environment + emissive), base.a);
+    gl_FragColor = vec4(linearToSrgb(applyFog(reflected + environment + emissive, v_worldPosition)), base.a);
 }
 `; }
 
@@ -326,6 +329,60 @@ vec4 packDepth(float depth) {
 }
 void main() { gl_FragColor = packDepth(gl_FragCoord.z); }
 `;
+
+const PARTICLE_VERTEX = `
+attribute vec3 a_center;
+attribute vec2 a_corner;
+attribute float a_size;
+attribute vec4 a_color;
+uniform mat4 u_viewProjection;
+uniform vec3 u_cameraRight;
+uniform vec3 u_cameraUp;
+varying vec2 v_corner;
+varying vec4 v_color;
+varying vec3 v_worldPosition;
+void main() {
+    vec3 world = a_center + (u_cameraRight * a_corner.x + u_cameraUp * a_corner.y) * (a_size * 0.5);
+    v_corner = a_corner; v_color = a_color; v_worldPosition = world;
+    gl_Position = u_viewProjection * vec4(world, 1.0);
+}
+`;
+const PARTICLE_FRAGMENT = `
+precision mediump float;
+uniform vec3 u_cameraPosition;
+uniform bool u_additive;
+uniform bool u_sparkle;
+varying vec2 v_corner;
+varying vec4 v_color;
+varying vec3 v_worldPosition;
+${FOG_GLSL_3D}
+vec3 linearToSrgb(vec3 c) {
+    c = max(c, vec3(0.0));
+    return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+void main() {
+    float r = length(v_corner);
+    if (r >= 1.0) discard;
+    float shape = (1.0 - r) * (1.0 - r);
+    if (u_sparkle) {
+        float flare = max(0.0, 1.0 - abs(v_corner.x) * 10.0) * (1.0 - abs(v_corner.y))
+            + max(0.0, 1.0 - abs(v_corner.y) * 10.0) * (1.0 - abs(v_corner.x));
+        shape = clamp(exp(-r * r * 9.0) + flare * 0.7, 0.0, 1.0);
+    }
+    float fog = clamp(fogAmount(v_worldPosition), 0.0, 1.0);
+    float alpha = v_color.a * shape;
+    if (u_additive) gl_FragColor = vec4(linearToSrgb(v_color.rgb * alpha * (1.0 - fog)), 1.0);
+    else gl_FragColor = vec4(linearToSrgb(mix(v_color.rgb, u_fogColor, fog)), alpha);
+}
+`;
+
+/** Particle program sources, exported so the Electron gate can compile them too. */
+export function webGL3DParticleShaderSources(): { vertex: string; fragment: string } {
+    return { vertex: PARTICLE_VERTEX, fragment: PARTICLE_FRAGMENT };
+}
+
+/** Largest particle batch per draw call in vertices; 16-bit indices cover four per particle. */
+export const PARTICLE_BATCH_MAX_3D = 16384;
 
 /**
  * Exact production sources, exported so the Electron gate compiles what the viewport executes.
@@ -445,6 +502,18 @@ interface State3D {
     uploads: (() => void)[];
     uploadScheduled: boolean;
     disposed: boolean;
+    fogLocs: (WebGLUniformLocation | null)[];
+    /** undefined until first needed; null when the particle program was rejected (particles are skipped). */
+    particles?: ParticleGL3D | null;
+    particleNote: string | null;
+}
+
+interface ParticleGL3D {
+    program: WebGLProgram; vertices: WebGLBuffer; indices: WebGLBuffer;
+    centerLoc: number; cornerLoc: number; sizeLoc: number; colorLoc: number;
+    viewProjectionLoc: WebGLUniformLocation | null; rightLoc: WebGLUniformLocation | null; upLoc: WebGLUniformLocation | null;
+    cameraPositionLoc: WebGLUniformLocation | null; additiveLoc: WebGLUniformLocation | null; sparkleLoc: WebGLUniformLocation | null;
+    fogLocs: (WebGLUniformLocation | null)[];
 }
 
 type Canvas3D = HTMLCanvasElement & { __vde3D?: State3D | null; __vde3DContextHandlers?: boolean;
@@ -592,7 +661,9 @@ function init(canvas: HTMLCanvasElement): State3D | null {
         environmentTextures: new Map(),
         readyTextures: new Set(), redraw: null,
         pickFramebuffer, pickTexture, pickDepth, pickIds: [null], width: 0, height: 0,
-        uintIndices: gl.getExtension("OES_element_index_uint"), uploads: [], uploadScheduled: false, disposed: false };
+        uintIndices: gl.getExtension("OES_element_index_uint"), uploads: [], uploadScheduled: false, disposed: false,
+        fogLocs: ["u_fogMode", "u_fogColor", "u_fogParams", "u_fogHeight"].map(name => gl.getUniformLocation(program, name)),
+        particleNote: null };
     const owned = canvas as Canvas3D;
     if (!owned.__vde3DContextHandlers) {
         owned.__vde3DContextHandlers = true;
@@ -879,6 +950,7 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
     const clustered = !picking && !!bindClusters(state, frame);
     if (picking && state.hasClustersLoc) gl.uniform1i(state.hasClustersLoc, 0);
     gl.uniform3fv(state.cameraPositionLoc, frame.cameraPosition);
+    setFogUniforms(gl, state.fogLocs, picking ? null : frame.fog);
     gl.uniformMatrix4fv(state.lightViewProjectionLoc, false,
         frame.shadow?.lightViewProjection ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     gl.uniform1i(state.hasShadowLoc, !picking && hasShadow ? 1 : 0);
@@ -1016,6 +1088,115 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
     gl.disable(gl.BLEND); gl.depthMask(true);
 }
 
+const CLEAR_COLOR_3D = [0.055, 0.063, 0.09, 1] as const;
+
+function setFogUniforms(gl: WebGLRenderingContext, locs: readonly (WebGLUniformLocation | null)[], fog: Frame3D["fog"]): void {
+    gl.uniform1f(locs[0], fog ? FOG_MODE_CODE_3D[fog.mode] : 0);
+    gl.uniform3f(locs[1], fog?.color.x ?? 0, fog?.color.y ?? 0, fog?.color.z ?? 0);
+    gl.uniform3f(locs[2], fog?.density ?? 0, fog?.start ?? 0, fog?.end ?? 1);
+    gl.uniform3f(locs[3], fog?.heightDensity ?? 0, fog?.heightBase ?? 0, fog?.heightFalloff ?? 1);
+}
+
+function particleGL(state: State3D): ParticleGL3D | null {
+    if (state.particles !== undefined) return state.particles;
+    const { gl } = state;
+    const saved = failure;
+    const vs = shader(gl, gl.VERTEX_SHADER, PARTICLE_VERTEX), fs = shader(gl, gl.FRAGMENT_SHADER, PARTICLE_FRAGMENT);
+    const program = vs && fs ? gl.createProgram() : null;
+    const vertices = gl.createBuffer(), indices = gl.createBuffer();
+    if (program && vs && fs) { gl.attachShader(program, vs); gl.attachShader(program, fs); gl.linkProgram(program); }
+    if (vs) gl.deleteShader(vs);
+    if (fs) gl.deleteShader(fs);
+    if (!program || !vertices || !indices || !gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        state.particleNote = `particles disabled: ${failure ?? (program ? gl.getProgramInfoLog(program) : null) ?? "the particle program was rejected"}`;
+        failure = saved;
+        if (program) gl.deleteProgram(program);
+        if (vertices) gl.deleteBuffer(vertices);
+        if (indices) gl.deleteBuffer(indices);
+        state.particles = null;
+        return null;
+    }
+    const quads = new Uint16Array(PARTICLE_BATCH_MAX_3D / 4 * 6);
+    for (let q = 0; q < PARTICLE_BATCH_MAX_3D / 4; q++) quads.set([q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3], q * 6);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indices);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, quads, gl.STATIC_DRAW);
+    state.particles = { program, vertices, indices,
+        centerLoc: gl.getAttribLocation(program, "a_center"), cornerLoc: gl.getAttribLocation(program, "a_corner"),
+        sizeLoc: gl.getAttribLocation(program, "a_size"), colorLoc: gl.getAttribLocation(program, "a_color"),
+        viewProjectionLoc: gl.getUniformLocation(program, "u_viewProjection"),
+        rightLoc: gl.getUniformLocation(program, "u_cameraRight"), upLoc: gl.getUniformLocation(program, "u_cameraUp"),
+        cameraPositionLoc: gl.getUniformLocation(program, "u_cameraPosition"),
+        additiveLoc: gl.getUniformLocation(program, "u_additive"), sparkleLoc: gl.getUniformLocation(program, "u_sparkle"),
+        fogLocs: ["u_fogMode", "u_fogColor", "u_fogParams", "u_fogHeight"].map(name => gl.getUniformLocation(program, name)) };
+    return state.particles;
+}
+
+const CORNERS_3D = [-1, -1, 1, -1, 1, 1, -1, 1];
+const PARTICLE_FLOATS_3D = 10;
+
+/**
+ * Billboard pass after the lit scene: depth-tested against it without writing depth, alpha
+ * batches sorted back to front, additive batches unsorted. Fake fog glow rides the same path.
+ * There is no soft-particle depth fade (WebGL 1 cannot read the depth buffer it is testing).
+ */
+function drawParticles(state: State3D, frame: Frame3D): void {
+    const glow = fogGlowBatch3D(frame.lights, frame.fog);
+    const batches = [...(frame.particles ?? []), ...(glow ? [glow] : [])].filter(b => b.count > 0);
+    if (batches.length === 0) return;
+    const gl2 = particleGL(state);
+    if (!gl2) return;
+    const { gl } = state;
+    const view = frame.view;
+    const right = [view[0], view[4], view[8]], up = [view[1], view[5], view[9]];
+    const forward = [-view[2], -view[6], -view[10]], eye = frame.cameraPosition;
+    gl.useProgram(gl2.program);
+    gl.uniformMatrix4fv(gl2.viewProjectionLoc, false, multiplyMat4(frame.projection, frame.view));
+    gl.uniform3fv(gl2.rightLoc, right); gl.uniform3fv(gl2.upLoc, up);
+    gl.uniform3fv(gl2.cameraPositionLoc, eye);
+    setFogUniforms(gl, gl2.fogLocs, frame.fog);
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(false);
+    gl.disable(gl.CULL_FACE); gl.enable(gl.BLEND);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl2.vertices);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl2.indices);
+    // The main program's extra attribute arrays must not leak into this program's slots.
+    for (let index = 0; index < 8; index++) gl.disableVertexAttribArray(index);
+    const stride = PARTICLE_FLOATS_3D * 4;
+    for (const [loc, size, offset] of [[gl2.centerLoc, 3, 0], [gl2.cornerLoc, 2, 3], [gl2.sizeLoc, 1, 5], [gl2.colorLoc, 4, 6]] as const) {
+        if (loc < 0) continue;
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, offset * 4);
+    }
+    const ordered = [...batches.filter(b => b.blend === "alpha"), ...batches.filter(b => b.blend === "additive")];
+    for (const batch of ordered) {
+        const count = Math.min(batch.count, PARTICLE_BATCH_MAX_3D / 4);
+        let order = Array.from({ length: count }, (_, i) => i);
+        if (batch.blend === "alpha") {
+            const depth = order.map(i => (batch.centers[i * 3] - eye[0]) * forward[0] + (batch.centers[i * 3 + 1] - eye[1]) * forward[1]
+                + (batch.centers[i * 3 + 2] - eye[2]) * forward[2]);
+            order = order.sort((a, b) => depth[b] - depth[a]);
+        }
+        const data = new Float32Array(count * 4 * PARTICLE_FLOATS_3D);
+        let o = 0;
+        for (const i of order) for (let c = 0; c < 4; c++) {
+            data[o++] = batch.centers[i * 3]; data[o++] = batch.centers[i * 3 + 1]; data[o++] = batch.centers[i * 3 + 2];
+            data[o++] = CORNERS_3D[c * 2]; data[o++] = CORNERS_3D[c * 2 + 1]; data[o++] = batch.sizes[i];
+            data[o++] = batch.colors[i * 4]; data[o++] = batch.colors[i * 4 + 1]; data[o++] = batch.colors[i * 4 + 2]; data[o++] = batch.colors[i * 4 + 3];
+        }
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+        if (batch.blend === "additive") gl.blendFunc(gl.ONE, gl.ONE); else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.uniform1i(gl2.additiveLoc, batch.blend === "additive" ? 1 : 0);
+        gl.uniform1i(gl2.sparkleLoc, batch.shape === "sparkle" ? 1 : 0);
+        gl.drawElements(gl.TRIANGLES, count * 6, gl.UNSIGNED_SHORT, 0);
+    }
+    for (const loc of [gl2.centerLoc, gl2.cornerLoc, gl2.sizeLoc, gl2.colorLoc]) if (loc >= 0) gl.disableVertexAttribArray(loc);
+    gl.disable(gl.BLEND); gl.depthMask(true);
+    gl.useProgram(state.program);
+}
+
+/** Why particles are not drawn on this canvas, or null when they are (or have not been needed yet). */
+export function webGL3DParticleNote(canvas: HTMLCanvasElement): string | null {
+    return (canvas as Canvas3D).__vde3D?.particleNote ?? null;
+}
 /** Draws both the visible frame and a retained offscreen id frame for synchronous picking. */
 export function emitWebGL3D(canvas: HTMLCanvasElement, frame: Frame3D, dpr = 1): boolean {
     const cached = canvas as Canvas3D;
@@ -1032,9 +1213,11 @@ export function emitWebGL3D(canvas: HTMLCanvasElement, frame: Frame3D, dpr = 1):
     const hasShadow = renderDirectionalShadow(state, frame);
     gl.viewport(0, 0, width, height);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.clearColor(0.055, 0.063, 0.09, 1); gl.clearDepth(1);
+    const clear = fogBackground3D(CLEAR_COLOR_3D, frame.fog);
+    gl.clearColor(clear[0], clear[1], clear[2], clear[3]); gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     drawFrame(state, frame, false, hasShadow);
+    drawParticles(state, frame);
     gl.bindFramebuffer(gl.FRAMEBUFFER, state.pickFramebuffer);
     gl.clearColor(0, 0, 0, 0); gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -1058,6 +1241,9 @@ export function disposeWebGL3D(canvas: HTMLCanvasElement): void {
     gl.deleteFramebuffer(state.shadowFramebuffer);
     for (const buffer of [state.position, state.normal, state.uv, state.uv1, state.indices, state.joints, state.weights]) gl.deleteBuffer(buffer);
     gl.deleteProgram(state.program); gl.deleteProgram(state.shadowProgram);
+    if (state.particles) {
+        gl.deleteProgram(state.particles.program); gl.deleteBuffer(state.particles.vertices); gl.deleteBuffer(state.particles.indices);
+    }
     owned.__vde3D = undefined; owned.__vde3DLastFrame = undefined;
 }
 

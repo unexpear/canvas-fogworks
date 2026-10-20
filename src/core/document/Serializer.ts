@@ -474,6 +474,9 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "88") { raw = { ...raw, version: "89" }; version = "89"; }
     // 89 -> 90: optional saveMigrations. Absent already meant no cross-build adoption.
     if (version === "89") { raw = { ...raw, version: "90" }; version = "90"; }
+    // 90 -> 91: optional spatial3d fog, particles and lightString. Absent keeps scenes unfogged,
+    // emitter-free and string-free; nothing is invented for existing nodes.
+    if (version === "90") { raw = { ...raw, version: "91" }; version = "91"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

@@ -1,6 +1,7 @@
 # Architecture
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
+<!-- re-read 2026-10-20: src/renderer gains LightSelection3D, LightClusters3D, Fog3D, Particles3D, LightStrings3D and MeshBuilder3D. Dispatch, history and geometry are unchanged. -->
 <!-- re-read 2026-10-04: applyMutations stores a saveMigrations document delta. Dispatch, history and geometry are otherwise unchanged. -->
 <!-- re-read 2026-08-13 after schema 67-68, the collection draw path and the column recovery:
      accurate at this altitude, with two additions below. The render model now RESOLVES a layer's
@@ -21,7 +22,7 @@
      not its readers; API-CONTRACTS carries the reader's surface. -->
 
 
-> 🔒 Frozen contract · schema v90 (app v0.0.5). Includes typed gameplay rules, offline 2D delivery, native mesh playback and opt-in oriented 3D contact resolution.
+> 🔒 Frozen contract · schema v91 (app v0.0.5). Includes typed gameplay rules, offline 2D delivery, native mesh playback and opt-in oriented 3D contact resolution.
 
 The file lifecycle is separate from editor history (`ProjectSession`); runtime event/command execution is shared with the standalone player (`GameplaySession`). Imported skeletal buffers remain transient and derive from confined source files, not document history. [Production workflows](PRODUCTION-WORK.md) records the current limits and measurements.
 

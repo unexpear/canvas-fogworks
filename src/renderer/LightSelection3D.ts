@@ -25,9 +25,9 @@ export const MIN_DRAW_LIGHTS_3D = 4;
 /**
  * Fragment uniform vectors the 3D shader spends on everything except the light arrays, rounded
  * up from a count of the declarations in emitWebGL3D (each scalar, bool, int or sampler can occupy
- * a full vec4 slot under the WebGL 1 packing rules).
+ * a full vec4 slot under the WebGL 1 packing rules). Schema 91 fog adds four.
  */
-export const FRAGMENT_UNIFORM_RESERVE_3D = 64;
+export const FRAGMENT_UNIFORM_RESERVE_3D = 68;
 /** Each light is packed into two vec4 uniforms: position-or-direction plus kind, color plus range. */
 export const VECTORS_PER_LIGHT_3D = 2;
 

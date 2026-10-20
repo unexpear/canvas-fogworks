@@ -68,7 +68,10 @@ export function copySpatial3D(s: DeepReadonly<Spatial3D>): Spatial3D {
             ? { kind: "box" as const, halfExtents: { ...s.collider.halfExtents } }
             : { kind: "sphere" as const, radius: s.collider.radius } } : {}),
         ...(s.environment ? { environment: { ...s.environment } } : {}),
-        ...(s.composition2d ? { composition2d: { ...s.composition2d } } : {})
+        ...(s.composition2d ? { composition2d: { ...s.composition2d } } : {}),
+        ...(s.fog ? { fog: JSON.parse(JSON.stringify(s.fog)) } : {}),
+        ...(s.particles ? { particles: JSON.parse(JSON.stringify(s.particles)) } : {}),
+        ...(s.lightString ? { lightString: JSON.parse(JSON.stringify(s.lightString)) } : {})
     };
 }
 

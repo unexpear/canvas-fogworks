@@ -1,6 +1,7 @@
 # Canvas Fogworks — full engine development plan
 
 <!-- describes: src/core/document, src/core/runtime, src/core/export, src/core/script, src/runtime, src/renderer, src/app/RuntimeAudio.ts, package.json -->
+<!-- re-read 2026-10-20: the 3D renderer now has many point lights (clustered per pixel with a per-object fallback), fog, particles and light strings, authored in schema 91 and drawn by the player through buildFrame3D. No GPU timer query, soft particles or volumetric scattering exist. F1 stays open. -->
 <!-- re-read 2026-10-04: the inspector authors the save-migration list. Package signature verification fail-closes without a certificate, publisher and matching trust anchor. World-partition cells can stream declared buffer/image/HDR payloads around a caller focus. The packaged player does not drive that focus. No clean-machine EXE, release certificate or publisher is recorded. Full prefabs remain open. F1 stays open. -->
 <!-- re-read 2026-10-02: player progress can adopt an explicitly listed previous content hash.
      package.json records test:progress-crash. Prefabs and the editor migration control remain open.

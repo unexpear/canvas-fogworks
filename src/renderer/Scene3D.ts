@@ -19,6 +19,11 @@ import {generateBlockout,BlockoutShape} from "../core/geometry/Blockout3D";
 import {solidTreeGeometry3D} from "../core/geometry/SolidTree3D";
 import { MAX_DRAW_LIGHTS_3D, MAX_SCENE_LIGHTS_3D, selectDrawLights3D } from "./LightSelection3D";
 import { buildLightClusters3D, clusterLightsAt3D } from "./LightClusters3D";
+import type { Fog3D } from "../core/document/Effects3D";
+import { SCENE_PARTICLES_MAX } from "../core/document/Effects3D";
+import { applyFog3D, fogAmount3D } from "./Fog3D";
+import { sampleParticles3D, type ParticleBatch3D } from "./Particles3D";
+import { buildLightString3D } from "./LightStrings3D";
 
 export type Mat4 = number[];
 
@@ -133,6 +138,10 @@ export interface Frame3D {
         intensity: number; rotationRadians: number } | null;
     /** First directional light's fitted world-to-clip transform, or null when nothing can cast. */
     shadow: { lightViewProjection: Mat4; direction: readonly [number, number, number]; lightIndex: number } | null;
+    /** Scene fog (first node carrying spatial3d.fog); absent or null renders unfogged. */
+    fog?: Fog3D | null;
+    /** Camera-facing particle batches evaluated at this frame's time, drawn after opaque geometry. */
+    particles?: ParticleBatch3D[];
 }
 
 export const MAT4_IDENTITY: readonly number[] =
@@ -327,11 +336,24 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
                 position: [world[12], world[13], world[14]] });
         }
     }
+    const stringDraws: Draw3D[] = [];
+    for (const [id, node] of doc.nodes) {
+        const strand = node.spatial3d?.lightString;
+        const world = worlds.get(id);
+        if (!strand || !world) continue;
+        const built = buildLightString3D(strand, world, id);
+        if (built.truncated) diagnostics.push(`: light string truncated to  bulbs.`);
+        stringDraws.push(...built.draws);
+        for (const light of built.lights) {
+            if (lights.length >= MAX_SCENE_LIGHTS_3D) droppedLights++;
+            else lights.push(light);
+        }
+    }
     if (droppedLights > 0) {
         diagnostics.push(`${droppedLights} light(s) beyond the ${MAX_SCENE_LIGHTS_3D}-light scene limit were ignored.`);
     }
 
-    const draws: Draw3D[] = [];
+    const draws: Draw3D[] = [...stringDraws];
     for (const [id, node] of doc.nodes) {
         const renderable = node.spatial3d?.renderable;
         const composition = node.spatial3d?.composition2d;
@@ -411,7 +433,22 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
                 ...(instance.skin ? { skin: instance.skin } : {}) });
         }
     }
+    let fog: Fog3D | null = null;
+    const particles: ParticleBatch3D[] = [];
+    let particleBudget = SCENE_PARTICLES_MAX;
+    for (const [id, node] of doc.nodes) {
+        if (!fog && node.spatial3d?.fog) fog = node.spatial3d.fog;
+        const emitter = node.spatial3d?.particles;
+        const world = worlds.get(id);
+        if (!emitter || !world) continue;
+        if (particleBudget <= 0) { diagnostics.push(`: particles skipped; the -particle scene cap is used up.`); continue; }
+        const batch = sampleParticles3D(emitter, world, animationSeconds, id, particleBudget);
+        particleBudget -= batch.count;
+        if (batch.count > 0) particles.push(batch);
+    }
     return {
+        fog,
+        particles,
         view: invertMat4(cameraWorld) ?? [...MAT4_IDENTITY],
         diagnostics,
         projection: projectionMatrix3D(camera, Math.max(1, width) / Math.max(1, height)),
@@ -520,6 +557,10 @@ export function captureFrame3D(frame: Frame3D, width: number, height: number): C
                     (ab[2] * ac[0] - ab[0] * ac[2]) * (backFacing ? -1 : 1),
                     (ab[0] * ac[1] - ab[1] * ac[0]) * (backFacing ? -1 : 1)]
             }, draw.unlit);
+            if (frame.fog) {
+                const fogged = applyFog3D([color[0], color[1], color[2]], frame.fog, fogAmount3D(frame.fog, frame.cameraPosition, centroid));
+                color[0] = fogged[0]; color[1] = fogged[1]; color[2] = fogged[2];
+            }
             for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
                 const px = x + 0.5, py = y + 0.5;
                 const w0 = edge(s[1].x, s[1].y, s[2].x, s[2].y, px, py) / area;

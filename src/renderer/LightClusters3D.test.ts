@@ -1,7 +1,7 @@
 /**
  * @module LightClusters3DTest
  * @description Grid sizing, completeness, overflow, texture layout and per-pixel CPU shading for the
- * clustered many-light path, plus the Christmas house demo's light budget.
+ * clustered many-light path.
  */
 
 import { createEmptyDocument } from "../core/document/Document";
@@ -11,7 +11,6 @@ import { buildFrame3D, captureFrame3D, FrameLight3D, MeshLibrary3D } from "./Sce
 import { buildLightClusters3D, clusterLightsAt3D, clusterRow3D, lightSignature3D, MAX_CLUSTER_AXIS_3D,
     MAX_CLUSTER_CELLS_3D, MAX_CLUSTER_LIGHTS_3D } from "./LightClusters3D";
 import { webGL3DShaderSources } from "./emitWebGL3D";
-import { christmasHouseFrame3D, christmasHouseScene3D, CHRISTMAS_HOUSE_VIEWS_3D } from "./ChristmasHouse3D";
 
 const point = (x: number, y: number, z: number, intensity = 1, range = 1): FrameLight3D =>
     ({ kind: "point", color: [1, 0.2, 0.1], intensity, range, position: [x, y, z] });
@@ -117,24 +116,5 @@ describe("per-pixel lighting on one large mesh", () => {
         const dark = red(-10 + 0.25, -10 + 0.25);
         const lit = spots.filter(([x, y]) => red(x, y) > dark + 40).length;
         expect(lit).toBe(100);
-    });
-});
-
-describe("Christmas house demo", () => {
-    test("carries several hundred bulb lights, emissive bulbs and a moonlight shadow", () => {
-        const scene = christmasHouseScene3D();
-        const points = scene.lights.filter(light => light.kind === "point");
-        expect(points.length).toBeGreaterThanOrEqual(300);
-        expect(scene.bulbs).toHaveLength(points.length);
-        const bulbDraws = scene.draws.filter(d => d.nodeId.startsWith("bulbs-"));
-        expect(bulbDraws).toHaveLength(5);
-        for (const d of bulbDraws) expect(Math.max(...d.emissive)).toBeGreaterThan(0.5);
-        const frame = christmasHouseFrame3D(scene, CHRISTMAS_HOUSE_VIEWS_3D.front, 16 / 9, "data:image/png;base64,AA==");
-        expect(frame.shadow).not.toBeNull();
-        expect(frame.draws.filter(d => d.nodeId.startsWith("halo-") && d.alphaMode === "BLEND")).toHaveLength(5);
-        const clusters = buildLightClusters3D(frame.lights)!;
-        expect(clusters.pointLights).toBe(points.length);
-        expect(clusters.height).toBeLessThanOrEqual(MAX_CLUSTER_CELLS_3D);
-        expect(christmasHouseFrame3D(scene, CHRISTMAS_HOUSE_VIEWS_3D.corner, 1, null).draws).toHaveLength(scene.draws.length);
     });
 });

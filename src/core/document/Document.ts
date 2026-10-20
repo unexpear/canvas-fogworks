@@ -183,6 +183,7 @@ export const CURRENT_VERSION: string =
  *         Absent rules and policy preserve the compatibility platformer runtime.
  *   "89" — optional animation transition fade and 3D clip fade. Absent still switches immediately.
  *   "90" — optional saveMigrations. Absent means this document adopts no previous package.
+ *   "91" — optional spatial3d fog, particles and lightString (Effects3D). Absent means none.
  */
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
@@ -190,7 +191,7 @@ import type { Tileset } from "./Tileset";
 import type { Asset3D } from "./Spatial3D";
 import type { DocumentSaveMigration } from "./SaveMigrations";
 
-export const SCHEMA_VERSION = "90";
+export const SCHEMA_VERSION = "91";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

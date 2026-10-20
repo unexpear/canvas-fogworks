@@ -1,7 +1,7 @@
 /**
  * @module ThreeDInspector
  * @description Focused inspector controls for authored 3D materials, lights,
- * environments and 2D surfaces. Document mutation remains owned by App.
+ * environments, 2D surfaces, fog, particles and light strings. Document mutation remains owned by App.
  */
 
 import React from "react";
@@ -12,6 +12,7 @@ import { MeshAsset3D } from "../renderer/Scene3D";
 import {BlockoutPanel} from "./BlockoutPanel";
 import {SolidTreePanel} from "./SolidTreePanel";
 import {solidLeaf3D} from "../core/geometry/SolidTree3D";
+import { Effects3DInspector } from "./Effects3DInspector";
 
 const colors = {
     bg: "#0e0e18",
@@ -237,5 +238,7 @@ export function ThreeDInspector({ node, assets, meshes, onChange }: ThreeDInspec
                 }} /> Lit surface
             </label>
         </Section>}
+
+        <Effects3DInspector spatial={spatial} onChange={onChange} />
     </>;
 }

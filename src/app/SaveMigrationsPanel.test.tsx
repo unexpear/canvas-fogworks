@@ -133,7 +133,7 @@ test("the authored list is what the package and runtime honor, and loading does 
         const legacy = JSON.parse(serializeDocument(gameReference()));
         legacy.version = "89";
         const migrated = deserializeDocument(JSON.stringify(legacy));
-        expect(migrated.version).toBe("90");
+        expect(migrated.version).toBe(SCHEMA_VERSION);
         expect(migrated.saveMigrations).toBeUndefined();
         const broken = JSON.parse(serializeDocument(gameReference()));
         broken.document.saveMigrations = [{ fromGameId: "nope", versions: [6] }];

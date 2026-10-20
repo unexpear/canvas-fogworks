@@ -1,6 +1,7 @@
 # API Contracts
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
+<!-- re-read 2026-10-20: schema 91 adds Effects3D contracts, Frame3D fog and particles, and the light-string, fog and particle renderer modules. Existing signatures are unchanged. -->
 <!-- re-read 2026-10-04: schema 90 adds optional document saveMigrations and SetSaveMigrationsAction. Existing signatures are unchanged. -->
 <!-- re-read 2026-08-14 after the runtime's first slice: accurate, and it gained a surface —
      `core/runtime/World`, below. Nothing existing changed shape; the runtime stamps a document the
@@ -16,7 +17,7 @@
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
 
-> 🔒 Frozen contract · schema v90 (app v0.0.5) · current through gameplay rules, native mesh playback and production workflow seams. The public surface each layer depends on.
+> 🔒 Frozen contract · schema v91 (app v0.0.5) · current through gameplay rules, native mesh playback and production workflow seams. The public surface each layer depends on.
 
 `ProjectSession` owns acknowledged saves and recovery; `stepGameplay` is shared by the editor and offline 2D player. `readGltfMotion`/`sampleGltfMotion` handle bounded imported TRS/skin playback, and `contact3D` supplies oriented collision contacts. Current scope and limits: [Production workflows](PRODUCTION-WORK.md).
 
@@ -3035,8 +3036,40 @@ rather than pretending to reproduce texture filtering or the full GPU BRDF; impo
 bypass its light equation. `smoke:many-lights` renders 400 point lights through the production
 renderer over 400 tile draws and over ONE large quad (per-pixel path), and over the tiles with the
 forced per-object fallback, and requires every cell to show its own bulb. `demo:christmas-house`
-renders `ChristmasHouse3D` (441 bulbs, each a point light plus an emissive sphere; the glow halo is
-a fake alpha-blended billboard, not bloom) and can save PNG screenshots with `--out <dir>`.
+renders `ChristmasHouse3D` (492 string bulbs on 9 strands, fog, snow, chimney smoke and tree
+sparkles) and saves front, corner and eave PNGs with `--out <dir>`.
+
+Schema 91 effects (`src/core/document/Effects3D.ts`) are optional `Spatial3D` fields, each with a
+validator and hard caps. `fog` is a scene setting (the first node carrying it wins): `linear`,
+`exp` or `exp2` distance fog combined with exponential height fog as 1 - (1 - a)(1 - b), mixed
+toward the fog color in linear light before sRGB encoding, in both the lit and unlit shader paths
+and in `captureFrame3D`. `Fog3D` (`fogAmount3D`, `heightFog3D`, `fogBackground3D`, `FOG_GLSL_3D`)
+holds the CPU math and the GLSL the shaders share; the clear color is pulled toward the fog color by
+`skyBlend`. "Light scatter" is FAKE: `fogGlowBatch3D` adds one additive soft sprite per point light,
+scaled by `lightGlow`; nothing is ray-marched. Fog adds four fragment vec4s
+(`FRAGMENT_UNIFORM_RESERVE_3D` is 68).
+
+`particles` is a stateless emitter (`Particles3D`): slot i spawns at i x interval and respawns with
+hashed randomness every slots x interval seconds, so `sampleParticles3D(emitter, world, t)` is
+deterministic, prewarmed and scrub-safe. Motion is p0 + (v + wind)t + gt^2/2 plus bounded sway;
+size, color and alpha interpolate over life. `PARTICLES_PER_EMITTER_MAX` (4096) and
+`SCENE_PARTICLES_MAX` (16384) cap them; a capped emitter's effective rate drops. `buildFrame3D`
+samples emitters at its animation time into `Frame3D.particles`; `emitWebGL3D` draws each batch
+as camera-facing quads after the opaque pass (depth test on, depth write off, alpha batches
+sorted back to front, additive unsorted) with fog applied. There is no soft-particle depth fade.
+If the particle program is rejected, particles are skipped and `webGL3DParticleNote` says why.
+Presets: `snowfall`, `chimney-smoke`, `sparkles`.
+
+`lightString` (`LightStrings3D.buildLightString3D(strand, world, nodeId)`) takes local clip points,
+`bulbSpacing`, `sag`, a color pattern, `bulbStyle` (`c9`, `c7`, `mini`; lathed teardrops),
+`bulbAim` (`down`, `up`, `out`, `radial` from the node's Y axis) and alternating `tilt`, and returns
+merged draws (wire tube, sockets and a clip at every point in one draw; one emissive draw per
+color), one point light per bulb, and the bulb and clip positions. The wire sags parabolically
+only between clips, by sag x span x horizontal fraction, so vertical spans hang straight. Snapping
+to surfaces is the author's job: the points are where the clips go. `buildFrame3D` adds strand
+draws and lights under the same 1024-light scene cap. `Effects3DInspector` (inside
+`ThreeDInspector`) edits all three through `SetSpatial3DAction`. `smoke:fog-particles` (in `ci`)
+builds documents through `buildFrame3D` and `emitWebGL3D`, the path the player uses.
 
 `CameraOrbit3D` supplies pure authored-camera navigation. Alt+left or middle drag orbits around the
 selected object's world position, adding Shift pans camera and target together, and wheel dollies
