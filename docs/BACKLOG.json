@@ -84,6 +84,14 @@
       "evidence": ["src/renderer/Lighting.ts", "docs/ARCHITECTURE.md"]
     },
     {
+      "id": "RENDER-003",
+      "area": "renderer",
+      "priority": "P2",
+      "status": "open",
+      "summary": "3D many-light path: frames now keep up to 1024 authored lights and each draw is shaded by its strongest 16/8/4 reachable lights (tier chosen from MAX_FRAGMENT_UNIFORM_VECTORS), replacing the fixed 4-per-frame cap; covered by unit tests and smoke:many-lights (400 point lights, Electron Chromium on one desktop GPU). Still open: selection is per draw, not per pixel, so one large mesh under many bulbs gets only the budget (a clustered/data-texture path would fix that); point lights cast no shadows; no frame-time numbers have been measured for hundreds of lights or on weak/mobile GPUs.",
+      "evidence": ["src/renderer/LightSelection3D.ts", "src/renderer/LightSelection3D.test.ts", "scripts/smoke-many-lights.js", "docs/API-CONTRACTS.md"]
+    },
+    {
       "id": "LAYOUT-001",
       "area": "layout",
       "priority": "P3",

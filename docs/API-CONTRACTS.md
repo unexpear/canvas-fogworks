@@ -3013,10 +3013,18 @@ object id; index zero is reserved for no object. `lastWebGL3DFailure` makes unsu
 framebuffers observable to the workspace fallback.
 
 Directional lights emit along transformed local `-Z`; point lights use world position and the
-`KHR_lights_punctual` recommended inverse-square/range attenuation. `Frame3D` intentionally caps
-this first WebGL 1 path at four lights. `captureFrame3D` remains a deterministic diffuse/depth/id
-reference rather than pretending to reproduce texture filtering or the full GPU BRDF; imported
-unlit materials bypass its light equation.
+`KHR_lights_punctual` recommended inverse-square/range attenuation. `Frame3D` keeps up to
+`MAX_SCENE_LIGHTS_3D` (1024) authored lights in document order and reports any extra as a frame
+diagnostic. `LightSelection3D` then gives each draw its own list: point lights whose range cannot
+reach the draw's world bounding sphere are culled, the rest rank by estimated contribution at the
+nearest point of the bounds, and directional lights (shadow caster first) always lead. The shader's
+per-draw light arrays are sized at init from `MAX_FRAGMENT_UNIFORM_VECTORS` to 16, 8 or 4
+(`drawLightBudget3D`), stepping down a tier if a driver still rejects the program; each light costs
+two vec4 uniforms. This is per-draw, not per-pixel: one very large mesh sees at most the budget.
+`captureFrame3D` uses the same selection and remains a deterministic diffuse/depth/id reference
+rather than pretending to reproduce texture filtering or the full GPU BRDF; imported unlit materials
+bypass its light equation. `smoke:many-lights` renders 400 point lights over 400 tiles through the
+production renderer and requires every tile to show its own bulb.
 
 `CameraOrbit3D` supplies pure authored-camera navigation. Alt+left or middle drag orbits around the
 selected object's world position, adding Shift pans camera and target together, and wheel dollies

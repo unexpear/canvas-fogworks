@@ -17,6 +17,7 @@ import { HdrEnvironmentImage } from "./HdrEnvironment";
 import { EnvironmentIbl3D, preparedEnvironment3D } from "./EnvironmentIbl3D";
 import {generateBlockout,BlockoutShape} from "../core/geometry/Blockout3D";
 import {solidTreeGeometry3D} from "../core/geometry/SolidTree3D";
+import { drawBoundingSphere3D, MAX_DRAW_LIGHTS_3D, MAX_SCENE_LIGHTS_3D, selectDrawLights3D } from "./LightSelection3D";
 
 export type Mat4 = number[];
 
@@ -102,7 +103,11 @@ export type FrameLight3D =
     | { kind: "point"; color: readonly [number, number, number]; intensity: number; range: number;
         position: readonly [number, number, number] };
 
-export const MAX_FRAME_LIGHTS_3D = 4;
+/**
+ * Lights one draw is shaded with (the largest shader tier). A frame itself keeps up to
+ * MAX_SCENE_LIGHTS_3D; LightSelection3D picks each draw's strongest reachable subset.
+ */
+export const MAX_FRAME_LIGHTS_3D = MAX_DRAW_LIGHTS_3D;
 export const AMBIENT_LIGHT_3D = 0.12;
 export const ENVIRONMENT_COLOR_3D = [0.18, 0.22, 0.3] as const;
 export const ENVIRONMENT_INTENSITY_3D = 0.35;
@@ -139,7 +144,10 @@ function normalized3(x: number, y: number, z: number): [number, number, number] 
     return [clean(x / length), clean(y / length), clean(z / length)];
 }
 
-/** Shared CPU reference for the WebGL diffuse-light equation. */
+/**
+ * Shared CPU reference for the WebGL diffuse-light equation. Callers with many lights pass the
+ * per-draw selection from selectDrawLights3D; at most MAX_FRAME_LIGHTS_3D are applied.
+ */
 export function litColor3D(
     base: readonly [number, number, number, number], lights: readonly FrameLight3D[],
     sample: LitSample3D, unlit = false
@@ -302,10 +310,12 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
     };
 
     const lights: FrameLight3D[] = [];
+    let droppedLights = 0;
     for (const [id, node] of doc.nodes) {
         const light = node.spatial3d?.light;
         const world = worlds.get(id);
-        if (!light || !world || lights.length >= MAX_FRAME_LIGHTS_3D) continue;
+        if (!light || !world) continue;
+        if (lights.length >= MAX_SCENE_LIGHTS_3D) { droppedLights++; continue; }
         const color = [light.color.x, light.color.y, light.color.z] as const;
         if (light.kind === "directional") {
             lights.push({ kind: "directional", color, intensity: light.intensity,
@@ -314,6 +324,9 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
             lights.push({ kind: "point", color, intensity: light.intensity, range: light.range,
                 position: [world[12], world[13], world[14]] });
         }
+    }
+    if (droppedLights > 0) {
+        diagnostics.push(`${droppedLights} light(s) beyond the ${MAX_SCENE_LIGHTS_3D}-light scene limit were ignored.`);
     }
 
     const draws: Draw3D[] = [];
@@ -472,6 +485,8 @@ export function captureFrame3D(frame: Frame3D, width: number, height: number): C
         (bx - ax) * (py - ay) - (by - ay) * (px - ax);
     for (const draw of frame.draws) {
         const mvp = multiplyMat4(pv, draw.model), p = draw.primitive.positions, ix = draw.primitive.indices;
+        const drawLights = selectDrawLights3D(frame.lights, drawBoundingSphere3D(p, draw.model, draw.skin),
+            MAX_DRAW_LIGHTS_3D, frame.shadow?.lightIndex ?? -1).indices.map(index => frame.lights[index]);
         for (let i = 0; i + 2 < ix.length; i += 3) {
             const v = [ix[i], ix[i + 1], ix[i + 2]].map(n => transformPoint4(mvp, p[n * 3], p[n * 3 + 1], p[n * 3 + 2]));
             if (v.some(q => !Number.isFinite(q[3]) || q[3] <= 0)) continue;
@@ -489,7 +504,7 @@ export function captureFrame3D(frame: Frame3D, width: number, height: number): C
                 transformPoint4(draw.model, p[n * 3], p[n * 3 + 1], p[n * 3 + 2]));
             const ab = [world[1][0] - world[0][0], world[1][1] - world[0][1], world[1][2] - world[0][2]];
             const ac = [world[2][0] - world[0][0], world[2][1] - world[0][1], world[2][2] - world[0][2]];
-            const color = litColor3D(draw.color, frame.lights, {
+            const color = litColor3D(draw.color, drawLights, {
                 position: [(world[0][0] + world[1][0] + world[2][0]) / 3,
                     (world[0][1] + world[1][1] + world[2][1]) / 3,
                     (world[0][2] + world[1][2] + world[2][2]) / 3],

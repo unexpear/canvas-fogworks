@@ -5,7 +5,9 @@
  */
 
 import { ENVIRONMENT_COLOR_3D, ENVIRONMENT_INTENSITY_3D, Frame3D, invertMat4,
-    MAX_FRAME_LIGHTS_3D, multiplyMat4, TextureInfo3D } from "./Scene3D";
+    multiplyMat4, TextureInfo3D } from "./Scene3D";
+import { DRAW_LIGHT_TIERS_3D, drawBoundingSphere3D, drawLightBudget3D, MAX_DRAW_LIGHTS_3D, MIN_DRAW_LIGHTS_3D,
+    packDrawLights3D, PackedLights3D, selectDrawLights3D } from "./LightSelection3D";
 import { preparedEnvironment3D } from "./EnvironmentIbl3D";
 import { GPU_SKIN_JOINTS } from "../core/import/GltfMotion";
 
@@ -78,7 +80,7 @@ void main() {
     gl_Position = u_mvp * local;
 }
 `;
-function fragmentSource(derivatives: boolean): string { return `${derivatives ? "#extension GL_OES_standard_derivatives : enable" : ""}
+function fragmentSource(derivatives: boolean, lights: number): string { return `${derivatives ? "#extension GL_OES_standard_derivatives : enable" : ""}
 #define HAS_DERIVATIVES ${derivatives ? 1 : 0}
 precision mediump float;
 uniform vec4 u_color;
@@ -122,11 +124,8 @@ uniform int u_shadowLightIndex;
 uniform sampler2D u_shadowTexture;
 uniform vec2 u_shadowTexel;
 uniform int u_lightCount;
-uniform int u_lightKind[${MAX_FRAME_LIGHTS_3D}];
-uniform vec3 u_lightColor[${MAX_FRAME_LIGHTS_3D}];
-uniform vec3 u_lightVector[${MAX_FRAME_LIGHTS_3D}];
-uniform float u_lightIntensity[${MAX_FRAME_LIGHTS_3D}];
-uniform float u_lightRange[${MAX_FRAME_LIGHTS_3D}];
+uniform vec4 u_lightPosition[${lights}];
+uniform vec4 u_lightColorRange[${lights}];
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec4 v_shadowPosition;
@@ -218,21 +217,24 @@ void main() {
     float nv = max(dot(normal, view), 0.0001);
     vec3 f0 = mix(vec3(0.04), base.rgb, metallic);
     vec3 reflected = vec3(0.0);
-    for (int i = 0; i < ${MAX_FRAME_LIGHTS_3D}; i++) {
+    for (int i = 0; i < ${lights}; i++) {
         if (i < u_lightCount) {
+            vec4 lightPosition = u_lightPosition[i];
+            vec4 lightColorRange = u_lightColorRange[i];
             vec3 toLight;
             float attenuation = 1.0;
-            if (u_lightKind[i] == 0) {
-                toLight = -u_lightVector[i];
+            if (lightPosition.w < 0.5) {
+                toLight = -lightPosition.xyz;
             } else {
-                vec3 offset = u_lightVector[i] - v_worldPosition;
+                vec3 offset = lightPosition.xyz - v_worldPosition;
                 float distanceToLight = length(offset);
-                toLight = normalize(offset);
-                float ratio = distanceToLight / u_lightRange[i];
+                toLight = offset / max(distanceToLight, 0.0001);
+                float ratio = distanceToLight / lightColorRange.w;
                 attenuation = max(min(1.0 - pow(ratio, 4.0), 1.0), 0.0)
                     / max(distanceToLight * distanceToLight, 0.0001);
             }
             float nl = max(dot(normal, toLight), 0.0);
+            if (nl <= 0.0 || attenuation <= 0.0) continue;
             vec3 halfVector = normalize(view + toLight);
             vec3 fresnel = fresnelSchlick(max(dot(halfVector, view), 0.0), f0);
             float distribution = distributionGgx(normal, halfVector, roughness);
@@ -240,7 +242,7 @@ void main() {
             vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
             vec3 diffuse = (vec3(1.0) - fresnel) * (1.0 - metallic) * base.rgb / PI;
             float visibility = i == u_shadowLightIndex ? shadowVisibility() : 1.0;
-            reflected += (diffuse + specular) * u_lightColor[i] * u_lightIntensity[i] * attenuation * nl * visibility;
+            reflected += (diffuse + specular) * lightColorRange.rgb * attenuation * nl * visibility;
         }
     }
     float sky = mix(0.55, 1.0, normal.y * 0.5 + 0.5);
@@ -283,9 +285,13 @@ vec4 packDepth(float depth) {
 void main() { gl_FragColor = packDepth(gl_FragCoord.z); }
 `;
 
-/** Exact production sources, exported so the Electron gate compiles what the viewport executes. */
-export function webGL3DShaderSources(derivatives: boolean): { vertex: string; fragment: string } {
-    return { vertex: VERTEX, fragment: fragmentSource(derivatives) };
+/**
+ * Exact production sources, exported so the Electron gate compiles what the viewport executes.
+ * lights sizes the per-draw light arrays; the viewport picks it with drawLightBudget3D.
+ */
+export function webGL3DShaderSources(derivatives: boolean, lights = MAX_DRAW_LIGHTS_3D): { vertex: string; fragment: string } {
+    const size = Math.max(1, Math.floor(Number.isFinite(lights) ? lights : MIN_DRAW_LIGHTS_3D));
+    return { vertex: VERTEX, fragment: fragmentSource(derivatives, size) };
 }
 
 interface State3D {
@@ -314,11 +320,11 @@ interface State3D {
     pickingLoc: WebGLUniformLocation | null;
     unlitLoc: WebGLUniformLocation | null;
     lightCountLoc: WebGLUniformLocation | null;
-    lightKindLoc: WebGLUniformLocation | null;
-    lightColorLoc: WebGLUniformLocation | null;
-    lightVectorLoc: WebGLUniformLocation | null;
-    lightIntensityLoc: WebGLUniformLocation | null;
-    lightRangeLoc: WebGLUniformLocation | null;
+    lightPositionLoc: WebGLUniformLocation | null;
+    lightColorRangeLoc: WebGLUniformLocation | null;
+    /** Light-array size the main program was compiled with. */
+    lightBudget: number;
+    packedLights: PackedLights3D | undefined;
     hasTextureLoc: WebGLUniformLocation | null;
     textureLoc: WebGLUniformLocation | null;
     hasMetallicRoughnessTextureLoc: WebGLUniformLocation | null;
@@ -390,33 +396,55 @@ function shader(gl: WebGLRenderingContext, kind: number, source: string): WebGLS
     return out;
 }
 
+function mainProgram(gl: WebGLRenderingContext, derivatives: boolean, lights: number): WebGLProgram | null {
+    const sources = webGL3DShaderSources(derivatives, lights);
+    const vs = shader(gl, gl.VERTEX_SHADER, sources.vertex), fs = shader(gl, gl.FRAGMENT_SHADER, sources.fragment);
+    const program = vs && fs ? gl.createProgram() : null;
+    if (!vs || !fs || !program) {
+        if (vs) gl.deleteShader(vs);
+        if (fs) gl.deleteShader(fs);
+        return null;
+    }
+    gl.attachShader(program, vs); gl.attachShader(program, fs); gl.linkProgram(program);
+    gl.deleteShader(vs); gl.deleteShader(fs);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        failure = `3D program did not link: ${gl.getProgramInfoLog(program) ?? "no driver log"}`;
+        gl.deleteProgram(program); return null;
+    }
+    return program;
+}
+
 function init(canvas: HTMLCanvasElement): State3D | null {
     failure = null;
     const gl = canvas.getContext("webgl", { alpha: false, depth: true, antialias: true });
     if (!gl) { failure = "the browser would not provide a WebGL context for the 3D viewport"; return null; }
     const derivatives = !!gl.getExtension("OES_standard_derivatives");
-    const sources = webGL3DShaderSources(derivatives);
-    const vs = shader(gl, gl.VERTEX_SHADER, sources.vertex), fs = shader(gl, gl.FRAGMENT_SHADER, sources.fragment);
-    const program = gl.createProgram(), position = gl.createBuffer(), normal = gl.createBuffer(),
+    // Size the light arrays from the reported uniform limit, then step down a tier if a driver
+    // still refuses the program, so a weak GPU gets fewer lights per draw instead of no viewport.
+    let lightBudget = drawLightBudget3D(gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS) as number);
+    let program = mainProgram(gl, derivatives, lightBudget);
+    for (const tier of DRAW_LIGHT_TIERS_3D) {
+        if (program) break;
+        if (tier >= lightBudget) continue;
+        lightBudget = tier; failure = null;
+        program = mainProgram(gl, derivatives, lightBudget);
+    }
+    const position = gl.createBuffer(), normal = gl.createBuffer(),
         uv = gl.createBuffer(), uv1 = gl.createBuffer(), indices = gl.createBuffer(),
         joints = gl.createBuffer(), weights = gl.createBuffer();
     const pickFramebuffer = gl.createFramebuffer(), pickTexture = gl.createTexture(), pickDepth = gl.createRenderbuffer();
     const shadowVs = shader(gl, gl.VERTEX_SHADER, SHADOW_VERTEX), shadowFs = shader(gl, gl.FRAGMENT_SHADER, SHADOW_FRAGMENT);
     const shadowProgram = gl.createProgram(), shadowFramebuffer = gl.createFramebuffer(), shadowTexture = gl.createTexture(),
         shadowDepth = gl.createRenderbuffer();
-    if (!vs || !fs || !program || !position || !normal || !uv || !uv1 || !indices || !joints || !weights || !pickFramebuffer || !pickTexture || !pickDepth
+    if (!program || !position || !normal || !uv || !uv1 || !indices || !joints || !weights || !pickFramebuffer || !pickTexture || !pickDepth
         || !shadowVs || !shadowFs || !shadowProgram || !shadowFramebuffer || !shadowTexture || !shadowDepth) {
         failure = failure ?? "the 3D viewport could not allocate its WebGL resources"; return null;
-    }
-    gl.attachShader(program, vs); gl.attachShader(program, fs); gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        failure = `3D program did not link: ${gl.getProgramInfoLog(program) ?? "no driver log"}`; return null;
     }
     gl.attachShader(shadowProgram, shadowVs); gl.attachShader(shadowProgram, shadowFs); gl.linkProgram(shadowProgram);
     if (!gl.getProgramParameter(shadowProgram, gl.LINK_STATUS)) {
         failure = `3D shadow program did not link: ${gl.getProgramInfoLog(shadowProgram) ?? "no driver log"}`; return null;
     }
-    gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteShader(shadowVs); gl.deleteShader(shadowFs);
+    gl.deleteShader(shadowVs); gl.deleteShader(shadowFs);
     const state: State3D = { gl, program, position, normal, uv, uv1, indices, joints, weights,
         positionLoc: gl.getAttribLocation(program, "a_position"),
         jointsLoc: gl.getAttribLocation(program, "a_joints"),
@@ -432,11 +460,9 @@ function init(canvas: HTMLCanvasElement): State3D | null {
         colorLoc: gl.getUniformLocation(program, "u_color"),
         pickingLoc: gl.getUniformLocation(program, "u_picking"), unlitLoc: gl.getUniformLocation(program, "u_unlit"),
         lightCountLoc: gl.getUniformLocation(program, "u_lightCount"),
-        lightKindLoc: gl.getUniformLocation(program, "u_lightKind[0]"),
-        lightColorLoc: gl.getUniformLocation(program, "u_lightColor[0]"),
-        lightVectorLoc: gl.getUniformLocation(program, "u_lightVector[0]"),
-        lightIntensityLoc: gl.getUniformLocation(program, "u_lightIntensity[0]"),
-        lightRangeLoc: gl.getUniformLocation(program, "u_lightRange[0]"),
+        lightPositionLoc: gl.getUniformLocation(program, "u_lightPosition[0]"),
+        lightColorRangeLoc: gl.getUniformLocation(program, "u_lightColorRange[0]"),
+        lightBudget, packedLights: undefined,
         hasTextureLoc: gl.getUniformLocation(program, "u_hasBaseColorTexture"),
         textureLoc: gl.getUniformLocation(program, "u_baseColorTexture"),
         hasMetallicRoughnessTextureLoc: gl.getUniformLocation(program, "u_hasMetallicRoughnessTexture"),
@@ -727,26 +753,12 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.CULL_FACE); gl.frontFace(gl.CCW); gl.cullFace(gl.BACK);
     gl.uniform1i(state.pickingLoc, picking ? 1 : 0);
-    gl.uniform1i(state.lightCountLoc, frame.lights.length);
-    const kinds = new Int32Array(MAX_FRAME_LIGHTS_3D);
-    const colors = new Float32Array(MAX_FRAME_LIGHTS_3D * 3);
-    const vectors = new Float32Array(MAX_FRAME_LIGHTS_3D * 3);
-    const intensities = new Float32Array(MAX_FRAME_LIGHTS_3D);
-    const ranges = new Float32Array(MAX_FRAME_LIGHTS_3D); ranges.fill(1);
-    frame.lights.forEach((light, index) => {
-        kinds[index] = light.kind === "directional" ? 0 : 1;
-        colors.set(light.color, index * 3); intensities[index] = light.intensity;
-        vectors.set(light.kind === "directional" ? light.direction : light.position, index * 3);
-        if (light.kind === "point") ranges[index] = light.range;
-    });
-    gl.uniform1iv(state.lightKindLoc, kinds); gl.uniform3fv(state.lightColorLoc, colors);
-    gl.uniform3fv(state.lightVectorLoc, vectors); gl.uniform1fv(state.lightIntensityLoc, intensities);
-    gl.uniform1fv(state.lightRangeLoc, ranges);
+    gl.uniform1i(state.lightCountLoc, 0);
     gl.uniform3fv(state.cameraPositionLoc, frame.cameraPosition);
     gl.uniformMatrix4fv(state.lightViewProjectionLoc, false,
         frame.shadow?.lightViewProjection ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     gl.uniform1i(state.hasShadowLoc, !picking && hasShadow ? 1 : 0);
-    gl.uniform1i(state.shadowLightIndexLoc, frame.shadow?.lightIndex ?? -1);
+    gl.uniform1i(state.shadowLightIndexLoc, -1);
     gl.uniform1i(state.shadowTextureLoc, 7); gl.uniform2f(state.shadowTexelLoc,
         1 / Math.max(1, state.shadowSize), 1 / Math.max(1, state.shadowSize));
     gl.activeTexture(gl.TEXTURE7);
@@ -810,6 +822,18 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
         gl.uniformMatrix4fv(state.modelLoc, false, draw.model);
         gl.uniformMatrix3fv(state.normalMatrixLoc, false, normalMatrix(draw.model));
         gl.uniform1i(state.unlitLoc, draw.unlit ? 1 : 0);
+        if (!picking && !draw.unlit) {
+            // Per-draw light list: the strongest lights that can reach this draw's bounds.
+            const selection = selectDrawLights3D(frame.lights,
+                drawBoundingSphere3D(draw.primitive.positions, draw.model, draw.skin), state.lightBudget,
+                frame.shadow?.lightIndex ?? -1);
+            const packed = state.packedLights = packDrawLights3D(frame.lights, selection.indices,
+                state.lightBudget, state.packedLights);
+            gl.uniform1i(state.lightCountLoc, packed.count);
+            gl.uniform4fv(state.lightPositionLoc, packed.positions);
+            gl.uniform4fv(state.lightColorRangeLoc, packed.colors);
+            gl.uniform1i(state.shadowLightIndexLoc, selection.shadowSlot);
+        }
         gl.uniform1f(state.metallicLoc, draw.metallic);
         gl.uniform1f(state.roughnessLoc, draw.roughness);
         gl.uniform3fv(state.emissiveLoc, draw.emissive);
@@ -940,6 +964,11 @@ export function webGL3DCapabilities(canvas: HTMLCanvasElement): {
     return { available: true, floatTextures: !!gl.getExtension("OES_texture_float"),
         floatLinear: !!gl.getExtension("OES_texture_float_linear"),
         uintIndices: !!gl.getExtension("OES_element_index_uint"), maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) as number };
+}
+
+/** Lights per draw the live program was compiled with, or null before the first successful init. */
+export function webGL3DLightBudget(canvas: HTMLCanvasElement): number | null {
+    return (canvas as Canvas3D).__vde3D?.lightBudget ?? null;
 }
 
 export function pickWebGL3D(canvas: HTMLCanvasElement, cssX: number, cssY: number, dpr = 1): string | null {
