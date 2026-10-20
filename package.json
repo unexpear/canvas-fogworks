@@ -18,6 +18,7 @@
     "smoke:lighting": "electron scripts/smoke-lighting.js",
     "smoke:3d": "electron scripts/smoke-3d.js",
     "smoke:many-lights": "electron scripts/smoke-many-lights.js",
+    "demo:christmas-house": "electron scripts/demo-christmas-house.js",
     "smoke:blockout": "electron scripts/smoke-blockout.js",
     "smoke:player-blockout": "electron scripts/smoke-player-blockout.js",
     "smoke:levels": "electron scripts/smoke-level-transition.js",

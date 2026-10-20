@@ -8,6 +8,8 @@ import { ENVIRONMENT_COLOR_3D, ENVIRONMENT_INTENSITY_3D, Frame3D, invertMat4,
     multiplyMat4, TextureInfo3D } from "./Scene3D";
 import { DRAW_LIGHT_TIERS_3D, drawBoundingSphere3D, drawLightBudget3D, MAX_DRAW_LIGHTS_3D, MIN_DRAW_LIGHTS_3D,
     packDrawLights3D, PackedLights3D, selectDrawLights3D } from "./LightSelection3D";
+import { buildLightClusters3D, LightClusters3D, lightSignature3D, MAX_CLUSTER_CELLS_3D,
+    MAX_CLUSTER_LIGHTS_3D } from "./LightClusters3D";
 import { preparedEnvironment3D } from "./EnvironmentIbl3D";
 import { GPU_SKIN_JOINTS } from "../core/import/GltfMotion";
 
@@ -80,9 +82,11 @@ void main() {
     gl_Position = u_mvp * local;
 }
 `;
-function fragmentSource(derivatives: boolean, lights: number): string { return `${derivatives ? "#extension GL_OES_standard_derivatives : enable" : ""}
+function fragmentSource(derivatives: boolean, lights: number, clustered: boolean): string { return `${derivatives ? "#extension GL_OES_standard_derivatives : enable" : ""}
 #define HAS_DERIVATIVES ${derivatives ? 1 : 0}
-precision mediump float;
+#define CLUSTERED ${clustered ? 1 : 0}
+#define CLUSTER_LIGHTS ${MAX_CLUSTER_LIGHTS_3D}
+precision ${clustered ? "highp" : "mediump"} float;
 uniform vec4 u_color;
 uniform bool u_picking;
 uniform bool u_unlit;
@@ -126,6 +130,14 @@ uniform vec2 u_shadowTexel;
 uniform int u_lightCount;
 uniform vec4 u_lightPosition[${lights}];
 uniform vec4 u_lightColorRange[${lights}];
+#if CLUSTERED
+uniform bool u_hasClusters;
+uniform sampler2D u_clusterLights;
+uniform vec3 u_clusterOrigin;
+uniform vec3 u_clusterDims;
+uniform float u_clusterCellSize;
+uniform vec2 u_clusterTextureSize;
+#endif
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec4 v_shadowPosition;
@@ -172,6 +184,21 @@ float shadowVisibility() {
         visible += p.z - 0.0015 <= stored ? 0.25 : 0.0;
     }
     return visible;
+}
+float pointAttenuation(float distanceToLight, float range) {
+    float ratio = distanceToLight / range;
+    return max(min(1.0 - pow(ratio, 4.0), 1.0), 0.0) / max(distanceToLight * distanceToLight, 0.0001);
+}
+vec3 shadeLight(vec3 normal, vec3 view, float nv, vec3 f0, vec3 baseColor, float metallic, float roughness,
+                vec3 toLight, vec3 radiance) {
+    float nl = max(dot(normal, toLight), 0.0);
+    vec3 halfVector = normalize(view + toLight);
+    vec3 fresnel = fresnelSchlick(max(dot(halfVector, view), 0.0), f0);
+    float distribution = distributionGgx(normal, halfVector, roughness);
+    float geometry = geometrySchlick(nv, roughness) * geometrySchlick(nl, roughness);
+    vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
+    vec3 diffuse = (vec3(1.0) - fresnel) * (1.0 - metallic) * baseColor / PI;
+    return (diffuse + specular) * radiance * nl;
 }
 vec2 materialUv(vec4 os, float rotation, int uvSet) {
     vec2 uv = uvSet == 1 ? v_uv1 : v_uv;
@@ -229,22 +256,37 @@ void main() {
                 vec3 offset = lightPosition.xyz - v_worldPosition;
                 float distanceToLight = length(offset);
                 toLight = offset / max(distanceToLight, 0.0001);
-                float ratio = distanceToLight / lightColorRange.w;
-                attenuation = max(min(1.0 - pow(ratio, 4.0), 1.0), 0.0)
-                    / max(distanceToLight * distanceToLight, 0.0001);
+                attenuation = pointAttenuation(distanceToLight, lightColorRange.w);
             }
-            float nl = max(dot(normal, toLight), 0.0);
-            if (nl <= 0.0 || attenuation <= 0.0) continue;
-            vec3 halfVector = normalize(view + toLight);
-            vec3 fresnel = fresnelSchlick(max(dot(halfVector, view), 0.0), f0);
-            float distribution = distributionGgx(normal, halfVector, roughness);
-            float geometry = geometrySchlick(nv, roughness) * geometrySchlick(nl, roughness);
-            vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
-            vec3 diffuse = (vec3(1.0) - fresnel) * (1.0 - metallic) * base.rgb / PI;
+            if (dot(normal, toLight) <= 0.0 || attenuation <= 0.0) continue;
             float visibility = i == u_shadowLightIndex ? shadowVisibility() : 1.0;
-            reflected += (diffuse + specular) * lightColorRange.rgb * attenuation * nl * visibility;
+            reflected += shadeLight(normal, view, nv, f0, base.rgb, metallic, roughness, toLight,
+                lightColorRange.rgb * attenuation * visibility);
         }
     }
+#if CLUSTERED
+    // Per-pixel point lights: this fragment's world cell is one texture row of packed lights.
+    if (u_hasClusters) {
+        vec3 cell = floor((v_worldPosition - u_clusterOrigin) / u_clusterCellSize);
+        if (cell.x >= 0.0 && cell.y >= 0.0 && cell.z >= 0.0
+            && cell.x < u_clusterDims.x && cell.y < u_clusterDims.y && cell.z < u_clusterDims.z) {
+            float row = cell.x + u_clusterDims.x * (cell.y + u_clusterDims.y * cell.z);
+            float rowV = (row + 0.5) / u_clusterTextureSize.y;
+            for (int i = 0; i < CLUSTER_LIGHTS; i++) {
+                vec4 clusterPosition = texture2D(u_clusterLights, vec2((float(i) * 2.0 + 0.5) / u_clusterTextureSize.x, rowV));
+                if (clusterPosition.w <= 0.0) break;
+                vec3 offset = clusterPosition.xyz - v_worldPosition;
+                float distanceToLight = length(offset);
+                float attenuation = pointAttenuation(distanceToLight, clusterPosition.w);
+                vec3 toLight = offset / max(distanceToLight, 0.0001);
+                if (attenuation <= 0.0 || dot(normal, toLight) <= 0.0) continue;
+                vec4 clusterColor = texture2D(u_clusterLights, vec2((float(i) * 2.0 + 1.5) / u_clusterTextureSize.x, rowV));
+                reflected += shadeLight(normal, view, nv, f0, base.rgb, metallic, roughness, toLight,
+                    clusterColor.rgb * attenuation);
+            }
+        }
+    }
+#endif
     float sky = mix(0.55, 1.0, normal.y * 0.5 + 0.5);
     vec3 envFresnel = f0 + (max(vec3(1.0 - roughness), f0) - f0) * pow(1.0 - nv, 5.0);
     vec3 environment = (${ENVIRONMENT_INTENSITY_3D.toFixed(4)} * sky) * vec3(
@@ -289,9 +331,24 @@ void main() { gl_FragColor = packDepth(gl_FragCoord.z); }
  * Exact production sources, exported so the Electron gate compiles what the viewport executes.
  * lights sizes the per-draw light arrays; the viewport picks it with drawLightBudget3D.
  */
-export function webGL3DShaderSources(derivatives: boolean, lights = MAX_DRAW_LIGHTS_3D): { vertex: string; fragment: string } {
+export function webGL3DShaderSources(derivatives: boolean, lights = MAX_DRAW_LIGHTS_3D,
+                                     clustered = false): { vertex: string; fragment: string } {
     const size = Math.max(1, Math.floor(Number.isFinite(lights) ? lights : MIN_DRAW_LIGHTS_3D));
-    return { vertex: VERTEX, fragment: fragmentSource(derivatives, size) };
+    return { vertex: VERTEX, fragment: fragmentSource(derivatives, size, clustered) };
+}
+
+/** "clustered" shades point lights per pixel; "per-object" is the uniform-array fallback. */
+export type LightingMode3D = "clustered" | "per-object";
+const CLUSTER_TEXTURE_UNIT_3D = 8;
+
+/** Why the per-pixel path is unavailable on this context, or null when it can be tried. */
+export function clusteredLightingUnsupported3D(gl: WebGLRenderingContext): string | null {
+    if (!gl.getExtension("OES_texture_float")) return "OES_texture_float is unavailable";
+    const high = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+    if (!high || high.precision <= 0) return "fragment shaders have no highp float";
+    if ((gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number) <= CLUSTER_TEXTURE_UNIT_3D) return "fewer than nine texture units";
+    if ((gl.getParameter(gl.MAX_TEXTURE_SIZE) as number) < MAX_CLUSTER_LIGHTS_3D * 2) return "MAX_TEXTURE_SIZE is too small";
+    return null;
 }
 
 interface State3D {
@@ -325,6 +382,17 @@ interface State3D {
     /** Light-array size the main program was compiled with. */
     lightBudget: number;
     packedLights: PackedLights3D | undefined;
+    lightingMode: LightingMode3D;
+    lightingNote: string | null;
+    hasClustersLoc: WebGLUniformLocation | null;
+    clusterLightsLoc: WebGLUniformLocation | null;
+    clusterOriginLoc: WebGLUniformLocation | null;
+    clusterDimsLoc: WebGLUniformLocation | null;
+    clusterCellSizeLoc: WebGLUniformLocation | null;
+    clusterTextureSizeLoc: WebGLUniformLocation | null;
+    clusterTexture: WebGLTexture | null;
+    clusterSignature: number | null;
+    clusters: LightClusters3D | null;
     hasTextureLoc: WebGLUniformLocation | null;
     textureLoc: WebGLUniformLocation | null;
     hasMetallicRoughnessTextureLoc: WebGLUniformLocation | null;
@@ -396,8 +464,8 @@ function shader(gl: WebGLRenderingContext, kind: number, source: string): WebGLS
     return out;
 }
 
-function mainProgram(gl: WebGLRenderingContext, derivatives: boolean, lights: number): WebGLProgram | null {
-    const sources = webGL3DShaderSources(derivatives, lights);
+function mainProgram(gl: WebGLRenderingContext, derivatives: boolean, lights: number, clustered = false): WebGLProgram | null {
+    const sources = webGL3DShaderSources(derivatives, lights, clustered);
     const vs = shader(gl, gl.VERTEX_SHADER, sources.vertex), fs = shader(gl, gl.FRAGMENT_SHADER, sources.fragment);
     const program = vs && fs ? gl.createProgram() : null;
     if (!vs || !fs || !program) {
@@ -422,7 +490,18 @@ function init(canvas: HTMLCanvasElement): State3D | null {
     // Size the light arrays from the reported uniform limit, then step down a tier if a driver
     // still refuses the program, so a weak GPU gets fewer lights per draw instead of no viewport.
     let lightBudget = drawLightBudget3D(gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS) as number);
-    let program = mainProgram(gl, derivatives, lightBudget);
+    // Per-pixel clustered lighting first; any missing capability or a rejected program falls back
+    // to the per-object uniform path. A canvas with data-lighting="per-object" forces the fallback.
+    const forced = canvas.dataset?.lighting === "per-object" ? "per-object lighting was requested" : null;
+    let lightingNote = forced ?? clusteredLightingUnsupported3D(gl);
+    let lightingMode: LightingMode3D = "per-object";
+    let program: WebGLProgram | null = null;
+    if (!lightingNote) {
+        program = mainProgram(gl, derivatives, lightBudget, true);
+        if (program) lightingMode = "clustered";
+        else { lightingNote = failure ?? "the clustered program was rejected"; failure = null; }
+    }
+    if (!program) program = mainProgram(gl, derivatives, lightBudget);
     for (const tier of DRAW_LIGHT_TIERS_3D) {
         if (program) break;
         if (tier >= lightBudget) continue;
@@ -462,7 +541,15 @@ function init(canvas: HTMLCanvasElement): State3D | null {
         lightCountLoc: gl.getUniformLocation(program, "u_lightCount"),
         lightPositionLoc: gl.getUniformLocation(program, "u_lightPosition[0]"),
         lightColorRangeLoc: gl.getUniformLocation(program, "u_lightColorRange[0]"),
-        lightBudget, packedLights: undefined,
+        lightBudget, packedLights: undefined, lightingMode, lightingNote,
+        hasClustersLoc: gl.getUniformLocation(program, "u_hasClusters"),
+        clusterLightsLoc: gl.getUniformLocation(program, "u_clusterLights"),
+        clusterOriginLoc: gl.getUniformLocation(program, "u_clusterOrigin"),
+        clusterDimsLoc: gl.getUniformLocation(program, "u_clusterDims"),
+        clusterCellSizeLoc: gl.getUniformLocation(program, "u_clusterCellSize"),
+        clusterTextureSizeLoc: gl.getUniformLocation(program, "u_clusterTextureSize"),
+        clusterTexture: lightingMode === "clustered" ? gl.createTexture() : null,
+        clusterSignature: null, clusters: null,
         hasTextureLoc: gl.getUniformLocation(program, "u_hasBaseColorTexture"),
         textureLoc: gl.getUniformLocation(program, "u_baseColorTexture"),
         hasMetallicRoughnessTextureLoc: gl.getUniformLocation(program, "u_hasMetallicRoughnessTexture"),
@@ -742,6 +829,41 @@ function renderDirectionalShadow(state: State3D, frame: Frame3D): boolean {
     return true;
 }
 
+/** Rebins and uploads the light grid only when the frame's lights changed. */
+function bindClusters(state: State3D, frame: Frame3D): LightClusters3D | null {
+    const { gl } = state;
+    if (state.lightingMode !== "clustered" || !state.clusterTexture) return null;
+    const signature = lightSignature3D(frame.lights);
+    if (signature !== state.clusterSignature) {
+        const maxRows = Math.min(MAX_CLUSTER_CELLS_3D, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
+        state.clusters = buildLightClusters3D(frame.lights, MAX_CLUSTER_LIGHTS_3D, maxRows);
+        state.clusterSignature = signature;
+        if (state.clusters) {
+            gl.activeTexture(gl.TEXTURE0 + CLUSTER_TEXTURE_UNIT_3D);
+            gl.bindTexture(gl.TEXTURE_2D, state.clusterTexture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, state.clusters.width, state.clusters.height, 0,
+                gl.RGBA, gl.FLOAT, state.clusters.data);
+        }
+    }
+    const clusters = state.clusters;
+    gl.uniform1i(state.hasClustersLoc, clusters ? 1 : 0);
+    gl.uniform1i(state.clusterLightsLoc, CLUSTER_TEXTURE_UNIT_3D);
+    gl.activeTexture(gl.TEXTURE0 + CLUSTER_TEXTURE_UNIT_3D);
+    gl.bindTexture(gl.TEXTURE_2D, state.clusterTexture);
+    if (clusters) {
+        gl.uniform3fv(state.clusterOriginLoc, clusters.origin);
+        gl.uniform3fv(state.clusterDimsLoc, clusters.dims);
+        gl.uniform1f(state.clusterCellSizeLoc, clusters.cellSize);
+        gl.uniform2f(state.clusterTextureSizeLoc, clusters.width, clusters.height);
+    }
+    return clusters;
+}
+
 function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow = false): void {
     const { gl } = state;
     const pv = multiplyMat4(frame.projection, frame.view);
@@ -754,6 +876,8 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
     gl.enable(gl.CULL_FACE); gl.frontFace(gl.CCW); gl.cullFace(gl.BACK);
     gl.uniform1i(state.pickingLoc, picking ? 1 : 0);
     gl.uniform1i(state.lightCountLoc, 0);
+    const clustered = !picking && !!bindClusters(state, frame);
+    if (picking && state.hasClustersLoc) gl.uniform1i(state.hasClustersLoc, 0);
     gl.uniform3fv(state.cameraPositionLoc, frame.cameraPosition);
     gl.uniformMatrix4fv(state.lightViewProjectionLoc, false,
         frame.shadow?.lightViewProjection ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
@@ -825,8 +949,8 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
         if (!picking && !draw.unlit) {
             // Per-draw light list: the strongest lights that can reach this draw's bounds.
             const selection = selectDrawLights3D(frame.lights,
-                drawBoundingSphere3D(draw.primitive.positions, draw.model, draw.skin), state.lightBudget,
-                frame.shadow?.lightIndex ?? -1);
+                clustered ? null : drawBoundingSphere3D(draw.primitive.positions, draw.model, draw.skin), state.lightBudget,
+                frame.shadow?.lightIndex ?? -1, clustered);
             const packed = state.packedLights = packDrawLights3D(frame.lights, selection.indices,
                 state.lightBudget, state.packedLights);
             gl.uniform1i(state.lightCountLoc, packed.count);
@@ -929,6 +1053,7 @@ export function disposeWebGL3D(canvas: HTMLCanvasElement): void {
     for (const entry of state.environmentTextures.values()) gl.deleteTexture(entry.texture);
     gl.deleteTexture(state.pickTexture); gl.deleteRenderbuffer(state.pickDepth);
     gl.deleteFramebuffer(state.pickFramebuffer);
+    if (state.clusterTexture) gl.deleteTexture(state.clusterTexture);
     gl.deleteTexture(state.shadowTexture); gl.deleteRenderbuffer(state.shadowDepth);
     gl.deleteFramebuffer(state.shadowFramebuffer);
     for (const buffer of [state.position, state.normal, state.uv, state.uv1, state.indices, state.joints, state.weights]) gl.deleteBuffer(buffer);
@@ -964,6 +1089,17 @@ export function webGL3DCapabilities(canvas: HTMLCanvasElement): {
     return { available: true, floatTextures: !!gl.getExtension("OES_texture_float"),
         floatLinear: !!gl.getExtension("OES_texture_float_linear"),
         uintIndices: !!gl.getExtension("OES_element_index_uint"), maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) as number };
+}
+
+/** Live lighting path and, for the fallback, why per-pixel shading was not used. */
+export function webGL3DLighting(canvas: HTMLCanvasElement): { mode: LightingMode3D; note: string | null;
+    pointLightsPerPixel: number; cells: number; overflowCells: number; maxCellLights: number } | null {
+    const state = (canvas as Canvas3D).__vde3D;
+    if (!state) return null;
+    const clusters = state.clusters;
+    return { mode: state.lightingMode, note: state.lightingNote,
+        pointLightsPerPixel: state.lightingMode === "clustered" ? MAX_CLUSTER_LIGHTS_3D : state.lightBudget,
+        cells: clusters?.height ?? 0, overflowCells: clusters?.overflowCells ?? 0, maxCellLights: clusters?.maxCellLights ?? 0 };
 }
 
 /** Lights per draw the live program was compiled with, or null before the first successful init. */

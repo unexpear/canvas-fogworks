@@ -100,7 +100,7 @@ function pointScore(light: Extract<FrameLight3D, { kind: "point" }>, gap: number
  * deterministic for a given frame.
  */
 export function selectDrawLights3D(lights: readonly FrameLight3D[], bounds: Sphere3D | null, budget: number,
-                                   shadowLightIndex = -1): DrawLights3D {
+                                   shadowLightIndex = -1, directionalOnly = false): DrawLights3D {
     const limit = Math.max(0, Math.floor(budget));
     const ranked: { index: number; group: number; score: number; distance: number }[] = [];
     lights.forEach((light, index) => {
@@ -108,6 +108,8 @@ export function selectDrawLights3D(lights: readonly FrameLight3D[], bounds: Sphe
             ranked.push({ index, group: index === shadowLightIndex ? 0 : 1, score: Infinity, distance: 0 });
             return;
         }
+        // The per-pixel cluster path shades point lights itself; uniforms then carry directionals only.
+        if (directionalOnly) return;
         if (!(light.intensity > 0) || !(light.range > 0) || Math.max(...light.color) <= 0) return;
         let distance = 0, gap = 0;
         if (bounds) {

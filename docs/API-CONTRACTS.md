@@ -3015,16 +3015,28 @@ framebuffers observable to the workspace fallback.
 Directional lights emit along transformed local `-Z`; point lights use world position and the
 `KHR_lights_punctual` recommended inverse-square/range attenuation. `Frame3D` keeps up to
 `MAX_SCENE_LIGHTS_3D` (1024) authored lights in document order and reports any extra as a frame
-diagnostic. `LightSelection3D` then gives each draw its own list: point lights whose range cannot
+diagnostic. By default point lights are shaded PER PIXEL: `LightClusters3D` bins them into a
+world-space grid (at most 32 cells per axis and 4096 cells, cubic cells over the lights' range
+bounds), keeps up to `MAX_CLUSTER_LIGHTS_3D` (32) per cell, strongest at the cell first, and packs
+each cell as one row of an RGBA float texture on unit 8. The fragment shader (a highp variant)
+finds its cell from its world position and loops that row, so one large mesh is lit by every bulb
+near each pixel; directional lights still go through uniforms with the shadow map. That path needs
+`OES_texture_float`, highp fragment floats, nine texture units and a 64-texel-wide texture; when
+any is missing, or the program is rejected, or a canvas carries `data-lighting="per-object"`, the
+renderer falls back to the per-draw path below and `webGL3DLighting` reports which path is live
+and why. In the per-draw fallback, `LightSelection3D` gives each draw its own list: point lights whose range cannot
 reach the draw's world bounding sphere are culled, the rest rank by estimated contribution at the
 nearest point of the bounds, and directional lights (shadow caster first) always lead. The shader's
 per-draw light arrays are sized at init from `MAX_FRAGMENT_UNIFORM_VECTORS` to 16, 8 or 4
 (`drawLightBudget3D`), stepping down a tier if a driver still rejects the program; each light costs
-two vec4 uniforms. This is per-draw, not per-pixel: one very large mesh sees at most the budget.
-`captureFrame3D` uses the same selection and remains a deterministic diffuse/depth/id reference
+two vec4 uniforms. That fallback is per-draw: one very large mesh sees at most the budget.
+`captureFrame3D` shades each triangle centroid from the same light grid and remains a deterministic diffuse/depth/id reference
 rather than pretending to reproduce texture filtering or the full GPU BRDF; imported unlit materials
-bypass its light equation. `smoke:many-lights` renders 400 point lights over 400 tiles through the
-production renderer and requires every tile to show its own bulb.
+bypass its light equation. `smoke:many-lights` renders 400 point lights through the production
+renderer over 400 tile draws and over ONE large quad (per-pixel path), and over the tiles with the
+forced per-object fallback, and requires every cell to show its own bulb. `demo:christmas-house`
+renders `ChristmasHouse3D` (441 bulbs, each a point light plus an emissive sphere; the glow halo is
+a fake alpha-blended billboard, not bloom) and can save PNG screenshots with `--out <dir>`.
 
 `CameraOrbit3D` supplies pure authored-camera navigation. Alt+left or middle drag orbits around the
 selected object's world position, adding Shift pans camera and target together, and wheel dollies

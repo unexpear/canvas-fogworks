@@ -88,8 +88,8 @@
       "area": "renderer",
       "priority": "P2",
       "status": "open",
-      "summary": "3D many-light path: frames now keep up to 1024 authored lights and each draw is shaded by its strongest 16/8/4 reachable lights (tier chosen from MAX_FRAGMENT_UNIFORM_VECTORS), replacing the fixed 4-per-frame cap; covered by unit tests and smoke:many-lights (400 point lights, Electron Chromium on one desktop GPU). Still open: selection is per draw, not per pixel, so one large mesh under many bulbs gets only the budget (a clustered/data-texture path would fix that); point lights cast no shadows; no frame-time numbers have been measured for hundreds of lights or on weak/mobile GPUs.",
-      "evidence": ["src/renderer/LightSelection3D.ts", "src/renderer/LightSelection3D.test.ts", "scripts/smoke-many-lights.js", "docs/API-CONTRACTS.md"]
+      "summary": "3D many-light path: frames keep up to 1024 authored lights. Point lights are shaded per pixel from a world-space light grid in an RGBA float texture (up to 32 lights per pixel), so one large mesh is lit by hundreds of bulbs; without OES_texture_float, highp fragment floats or a ninth texture unit it falls back to per-draw selection (16/8/4 lights per draw by uniform limit). Covered by unit tests, smoke:many-lights and demo:christmas-house (441 lights; median ~21 ms per full emit at 1280x720 on one Intel Iris Xe laptop GPU, rough wall-clock incl. picking pass). Still open: grid cells that hold more than 32 lights drop the weakest (182 of 3078 cells in the demo); the grid is uniform world space, so huge sparse scenes get coarse cells; point lights cast no shadows; the bulb glow is a fake billboard halo, not bloom; not measured on mobile or weaker GPUs; no editor sample project for the demo.",
+      "evidence": ["src/renderer/LightClusters3D.ts", "src/renderer/LightClusters3D.test.ts", "src/renderer/LightSelection3D.ts", "src/renderer/ChristmasHouse3D.ts", "scripts/smoke-many-lights.js", "scripts/demo-christmas-house.js", "docs/API-CONTRACTS.md"]
     },
     {
       "id": "LAYOUT-001",

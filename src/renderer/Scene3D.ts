@@ -17,7 +17,8 @@ import { HdrEnvironmentImage } from "./HdrEnvironment";
 import { EnvironmentIbl3D, preparedEnvironment3D } from "./EnvironmentIbl3D";
 import {generateBlockout,BlockoutShape} from "../core/geometry/Blockout3D";
 import {solidTreeGeometry3D} from "../core/geometry/SolidTree3D";
-import { drawBoundingSphere3D, MAX_DRAW_LIGHTS_3D, MAX_SCENE_LIGHTS_3D, selectDrawLights3D } from "./LightSelection3D";
+import { MAX_DRAW_LIGHTS_3D, MAX_SCENE_LIGHTS_3D, selectDrawLights3D } from "./LightSelection3D";
+import { buildLightClusters3D, clusterLightsAt3D } from "./LightClusters3D";
 
 export type Mat4 = number[];
 
@@ -109,6 +110,7 @@ export type FrameLight3D =
  */
 export const MAX_FRAME_LIGHTS_3D = MAX_DRAW_LIGHTS_3D;
 export const AMBIENT_LIGHT_3D = 0.12;
+const DARK_LIGHT_3D: FrameLight3D = { kind: "directional", color: [0, 0, 0], intensity: 0, direction: [0, 0, -1] };
 export const ENVIRONMENT_COLOR_3D = [0.18, 0.22, 0.3] as const;
 export const ENVIRONMENT_INTENSITY_3D = 0.35;
 
@@ -145,8 +147,8 @@ function normalized3(x: number, y: number, z: number): [number, number, number] 
 }
 
 /**
- * Shared CPU reference for the WebGL diffuse-light equation. Callers with many lights pass the
- * per-draw selection from selectDrawLights3D; at most MAX_FRAME_LIGHTS_3D are applied.
+ * Shared CPU reference for the WebGL diffuse-light equation. Every light passed is applied; callers
+ * with many lights pass the per-pixel cluster list (or a per-draw selection) for the sample.
  */
 export function litColor3D(
     base: readonly [number, number, number, number], lights: readonly FrameLight3D[],
@@ -155,7 +157,7 @@ export function litColor3D(
     if (unlit || lights.length === 0) return [...base];
     const n = normalized3(sample.normal[0], sample.normal[1], sample.normal[2]);
     const amount = [AMBIENT_LIGHT_3D, AMBIENT_LIGHT_3D, AMBIENT_LIGHT_3D];
-    for (const light of lights.slice(0, MAX_FRAME_LIGHTS_3D)) {
+    for (const light of lights) {
         let direction: [number, number, number], attenuation = 1;
         if (light.kind === "directional") {
             direction = [-light.direction[0], -light.direction[1], -light.direction[2]];
@@ -423,7 +425,8 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
     };
 }
 
-function directionalShadowFrame3D(draws: readonly Draw3D[], lights: readonly FrameLight3D[]): Frame3D["shadow"] {
+/** Fits the first directional light's shadow camera around the given draws. */
+export function directionalShadowFrame3D(draws: readonly Draw3D[], lights: readonly FrameLight3D[]): Frame3D["shadow"] {
     const lightIndex = lights.findIndex(item => item.kind === "directional");
     const light = lights[lightIndex] as Extract<FrameLight3D, { kind: "directional" }> | undefined;
     if (!light || draws.length === 0) return null;
@@ -483,10 +486,12 @@ export function captureFrame3D(frame: Frame3D, width: number, height: number): C
     const pv = multiplyMat4(frame.projection, frame.view);
     const edge = (ax: number, ay: number, bx: number, by: number, px: number, py: number) =>
         (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+    // Mirrors the default GPU path: directionals through uniforms, point lights per pixel from the grid.
+    const clusters = buildLightClusters3D(frame.lights);
+    const directional = selectDrawLights3D(frame.lights, null, MAX_DRAW_LIGHTS_3D, frame.shadow?.lightIndex ?? -1, true)
+        .indices.map(index => frame.lights[index]);
     for (const draw of frame.draws) {
         const mvp = multiplyMat4(pv, draw.model), p = draw.primitive.positions, ix = draw.primitive.indices;
-        const drawLights = selectDrawLights3D(frame.lights, drawBoundingSphere3D(p, draw.model, draw.skin),
-            MAX_DRAW_LIGHTS_3D, frame.shadow?.lightIndex ?? -1).indices.map(index => frame.lights[index]);
         for (let i = 0; i + 2 < ix.length; i += 3) {
             const v = [ix[i], ix[i + 1], ix[i + 2]].map(n => transformPoint4(mvp, p[n * 3], p[n * 3 + 1], p[n * 3 + 2]));
             if (v.some(q => !Number.isFinite(q[3]) || q[3] <= 0)) continue;
@@ -504,10 +509,13 @@ export function captureFrame3D(frame: Frame3D, width: number, height: number): C
                 transformPoint4(draw.model, p[n * 3], p[n * 3 + 1], p[n * 3 + 2]));
             const ab = [world[1][0] - world[0][0], world[1][1] - world[0][1], world[1][2] - world[0][2]];
             const ac = [world[2][0] - world[0][0], world[2][1] - world[0][1], world[2][2] - world[0][2]];
-            const color = litColor3D(draw.color, drawLights, {
-                position: [(world[0][0] + world[1][0] + world[2][0]) / 3,
-                    (world[0][1] + world[1][1] + world[2][1]) / 3,
-                    (world[0][2] + world[1][2] + world[2][2]) / 3],
+            const centroid: [number, number, number] = [(world[0][0] + world[1][0] + world[2][0]) / 3,
+                (world[0][1] + world[1][1] + world[2][1]) / 3, (world[0][2] + world[1][2] + world[2][2]) / 3];
+            const sampleLights = [...directional, ...clusterLightsAt3D(clusters, centroid).map(index => frame.lights[index])];
+            // A lit frame with nothing reaching this sample is ambient-only, never the unlit base color.
+            if (sampleLights.length === 0 && frame.lights.length > 0) sampleLights.push(DARK_LIGHT_3D);
+            const color = litColor3D(draw.color, sampleLights, {
+                position: centroid,
                 normal: [(ab[1] * ac[2] - ab[2] * ac[1]) * (backFacing ? -1 : 1),
                     (ab[2] * ac[0] - ab[0] * ac[2]) * (backFacing ? -1 : 1),
                     (ab[0] * ac[1] - ab[1] * ac[0]) * (backFacing ? -1 : 1)]
